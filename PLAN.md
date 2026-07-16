@@ -1,0 +1,380 @@
+# Ogoh — Reja
+
+AI yangiliklarini avtomatik yig'uvchi, filtrlovchi va har bir foydalanuvchiga
+uning qiziqishiga qarab yetkazuvchi Telegram bot.
+
+**Ko'lam:** 10-50 foydalanuvchi (men + do'stlar)
+**Kanal:** Telegram bot + Mini App (sozlamalar UI) + web admin panel
+**LLM:** Google Gemini free tier (asosiy), Groq (zaxira)
+
+---
+
+## 1. Asosiy arxitektura qarori
+
+> **LLM ga "internetdan yangilik qidir" dema.**
+
+Sabab: qimmat, sekin, ishonchsiz, hallucinate qiladi, va kvotani bir kunda yeydi.
+
+**O'rniga:** manbalarni RSS/API orqali *deterministik* yig'. LLM faqat uchta ishni qilsin:
+tasnif (classify), muhimlik bahosi (score), qisqartirish (summarize). Matn allaqachon
+qo'lingda bo'ladi — LLM hech narsa qidirmaydi.
+
+Natija: LLM chaqiruv soni kuniga ~20 ta. Gemini free limit — 1500/kun. Ya'ni **kvotaning
+~1% i ishlatiladi.**
+
+Istisno: kunda bir marta, eng muhim 3 ta yangilik uchun *active research* agent ishlaydi
+(Gemini + `google_search` grounding) — chuqurroq kontekst yig'adi. Bu yerda AI haqiqatan
+tadqiqot qiladi, lekin cheklangan hajmda.
+
+---
+
+## 2. LLM provider tanlovi
+
+| Provider | Model ID | Free limit | Rol |
+|---|---|---|---|
+| Gemini Flash-Lite | `gemini-3.1-flash-lite` | 15 RPM | **asosiy** — classify/summarize |
+| Gemini Flash | `gemini-3.5-flash` | 10 RPM, 250k TPM, 1500 req/kun | og'irroq ish uchun |
+| Gemini Embedding | `gemini-embedding-001` | tekin | dedupe (P2) |
+| Groq | — | 30 RPM, **6k TPM**, ~1k req/kun | zaxira (fallback) |
+| OpenRouter `:free` | — | 20 RPM, 50 req/kun | uchinchi zaxira |
+
+> Model ID lari rasmiy hujjatdan tekshirilgan. Ilgari yozgan `gemini-3-flash` va
+> `text-embedding-004` — ikkalasi ham mavjud emas.
+
+**Nega Gemini:** yangilik qisqartirish **TPM-og'ir** ish, RPM-og'ir emas. Groq ning
+6k TPM si bitta o'rtacha maqolaga ham zo'rg'a yetadi. Gemini ning 250k TPM si — 40 barobar keng.
+Karta ham kerak emas.
+
+Groq ni zaxira qil: alohida kvota, Gemini yiqilsa avtomatik o'tib ketadi.
+Kod darajasida `LLMProvider` interface qil — provider almashtirish bitta config o'zgarishi bo'lsin.
+Free tier shartlari o'zgaradi; abstraksiya bugun arzon, keyin qimmat.
+
+Embedding: Gemini `gemini-embedding-001` — u ham tekin.
+
+---
+
+## 3. Stack (tanlangan)
+
+**Backend: Python**
+
+Sabab — bitta hal qiluvchi argument: **`trafilatura`**. HTML dan maqola matnini toza ajratib
+olish bu loyihaning eng iflos qismi, va trafilatura dan yaxshiroq JS ekvivalenti yo'q.
+Shuningdek `feedparser` buzuq RSS feed larni `rss-parser` dan ancha chidamli hazm qiladi.
+Backend og'ir ishni qiladi (parse, extract, dedupe, embed, schedule) — Python u yerda ustun.
+
+Frontend baribir alohida build bo'ladi, shuning uchun "bitta til" argumenti bu yerda kuchsiz.
+
+```
+Backend:    Python 3.12 + FastAPI + aiogram + APScheduler + SQLAlchemy
+Parsing:    feedparser, trafilatura, httpx
+LLM:        google-genai SDK
+DB:         Postgres 16 + pgvector
+Frontend:   Vite + React (bitta app, ikkita route: /app = Mini App, /admin = panel)
+Deploy:     VPS (Hetzner CX22 ~€4/oy) + docker-compose
+```
+
+**Nega Supabase emas, VPS:** free tier 500MB — `raw_text` uni tez to'ldiradi. VPS da
+Postgres o'zingda, tarmoq hop yo'q, free-tier siyosati o'zgarishidan qo'rqmaysan. €4 arzon.
+(Agar ops bilan shug'ullanishni umuman xohlamasang — Supabase ol, lekin 90 kunlik
+retention siyosatini boshidan yoz.)
+
+---
+
+## 4. Ma'lumot oqimi (pipeline)
+
+```
+Manbalar (RSS / HN API / arXiv / GitHub / scrape)
+   │  har 20 daqiqada
+   ▼
+Ingest      fetch → normalize → items jadvali
+   ▼
+Prefilter   arzon darvoza (LLM siz) — 300 ta → ~120 ta
+   ▼
+Dedupe      url hash → simhash → embedding cluster
+   ▼
+Enrich      LLM batch (20 ta/prompt) → tags, importance, summary
+   ▼
+Match       har user uchun: tags ∩ interests, importance ≥ threshold, keywords
+   ▼
+Digest      user jadvali bo'yicha (instant / daily / weekly)
+   ▼
+Deliver     Telegram
+```
+
+### Prefilter — LLM dan oldingi arzon darvoza
+
+Hamma narsani LLM ga berma. Avval arzon filtr:
+
+- Manba ishonch darajasi (Anthropic rasmiy = doim o'tadi)
+- Barcha userlar qiziqishlari birlashmasi + taxonomy seed so'zlari bo'yicha keyword match
+- HackerNews: `score >= 50`
+- arXiv: title/abstract keyword hit bo'lmasa tashla
+
+Natija: 300 → 120. LLM chaqiruvning 60% i tejaladi.
+
+### Dedupe — 3 daraja
+
+Bir yangilikni 10 ta sayt yozadi. Dedupe ishlamasa user spam yeydi va chiqib ketadi.
+**MVP da ham kerak — keyinga qoldirma.**
+
+1. **URL canonicalize** — `utm_*` va fragment ni olib tashla, redirect ni yech,
+   trailing slash normalize → `sha256` → DB da `UNIQUE`. Aniq takrorlarni o'ldiradi.
+2. **Simhash** (64-bit, title + lead ustida) — Hamming distance ≤ 3 bo'lsa bir xil yangilik.
+   Arzon, LLM kerak emas. "OpenAI launches X" va "OpenAI Launches X — TechCrunch" ni tutadi.
+3. **Embedding cosine** — 48 soatlik oyna ichida `> 0.88` bo'lsa bitta cluster.
+   Boshqacha yozilgan, lekin ma'nosi bir xil yangiliklarni tutadi.
+
+3-darajani faqat 1 va 2 dan o'tganlarga qo'lla — chaqiruv tejaladi.
+
+Cluster ichidan canonical tanla: `manba_ishonchi × yangilik`. Xabarda "+4 boshqa manba" ko'rsat.
+
+---
+
+## 5. Manbalar
+
+Hammasi `curl` bilan tekshirilgan (2026-07-16):
+
+| Manba | Usul | Holat |
+|---|---|---|
+| **OpenAI News** `openai.com/news/rss.xml` | RSS | ✅ 1036 item — **RSS bor**, scrape kerak emas |
+| Simon Willison | RSS | ✅ 30 item, eng zich manba |
+| Ars Technica AI | RSS | ✅ 20 item |
+| Hacker News `hnrss.org/frontpage?points=100` | RSS | ✅ 14 item |
+| TechCrunch AI | RSS | ✅ 20 item |
+| HuggingFace blog | RSS | ✅ 829 item — P1 da qo'shiladi |
+| The Verge AI | RSS | ✅ 10 item — P1 |
+| **Anthropic** | **scrape** | ❌ RSS yo'q (`/rss.xml`, `/news/rss.xml` — ikkalasi 404) |
+| ~~Google DeepMind~~ `deepmind.google/blog/rss.xml` | — | ❌ **o'lik**: 240 bayt, `<channel>` bor, item yo'q |
+| Reddit `r/LocalLLaMA`, `r/ClaudeAI` | RSS | P1 |
+| arXiv `cs.AI`, `cs.CL` | rasmiy API | P2 |
+| GitHub Releases | Atom feed | P2 |
+
+Ikkita tuzatish:
+- **OpenAI da RSS bor** — ilgari "scrape kerak" degandim, noto'g'ri edi. Bitta scraper tejaldi,
+  ustiga u *birlamchi* manba (trust_tier=1).
+- **DeepMind feed o'lik** — aynan rejadagi "jimgina 0 item qaytaradi" xavfining tirik misoli.
+  Ro'yxatdan chiqarildi.
+
+Har bir manba `Source` protokolini bajarsin: `fetch() -> list[RawItem]`. Yangi manba qo'shish
+= bitta fayl, boshqa joyga tegmaydi.
+
+---
+
+## 6. Taxonomy (qat'iy teglar)
+
+```
+model-release      yangi model, versiya yangilanishi
+pricing-limits     narx, rate limit, kvota o'zgarishi
+api-features       yangi API param, endpoint, SDK
+agents-tools       MCP, agent, tool use, computer use
+research           maqola, benchmark
+opensource         ochiq vazn, local model
+funding-business   investitsiya, sotib olish
+safety-policy      xavfsizlik, regulyatsiya
+infra-hardware     chip, datacenter, serving
+product-launch     consumer app, product
+```
+
+10 ta teg MVP uchun yetarli. User o'ziga keraklisini tanlaydi.
+
+---
+
+## 7. DB sxemasi (asosiy jadvallar)
+
+```sql
+sources(id, name, kind, url, enabled, trust_tier,
+        last_fetched_at, etag, last_modified)
+  -- kind: rss | hn | arxiv | github_releases | scrape
+
+items(id, source_id, url, canonical_url, url_hash UNIQUE,
+      title, author, published_at, raw_text,
+      simhash BIGINT, cluster_id, fetched_at)
+
+item_enrichment(item_id PK, tags TEXT[], entities TEXT[],
+                importance SMALLINT,      -- 0..10
+                summary TEXT,
+                embedding VECTOR(768),
+                model_used, enriched_at)
+
+clusters(id, canonical_item_id, member_count, top_importance)
+
+users(id, telegram_id UNIQUE, username, lang, timezone,
+      digest_mode,               -- instant | daily | weekly | off
+      digest_hour, min_importance SMALLINT DEFAULT 5,
+      created_at, is_active)
+
+user_topics(user_id, tag)          -- taxonomy dan
+user_keywords(user_id, keyword)    -- erkin matn: "MCP", "Anthropic"
+
+-- IDEMPOTENCY GUARD — eng muhim jadval
+deliveries(user_id, cluster_id, sent_at, message_id,
+           PRIMARY KEY(user_id, cluster_id))
+
+feedback(user_id, cluster_id, vote SMALLINT, created_at)  -- +1 / -1
+```
+
+`deliveries` dagi `PRIMARY KEY(user_id, cluster_id)` — ikki marta yuborishga qarshi
+yagona ishonchli himoya. Kod xato qilsa ham DB to'xtatadi. Buni birinchi kundan qo'y.
+
+---
+
+## 8. Shaxsiylashtirish (bosqichma-bosqich)
+
+- **P1 — deterministik:** `tags ∩ user_topics`, `importance >= user.min_importance`,
+  keyword OR-match. Debug qilish oson, natija tushunarli.
+- **P2 — embedding:** user erkin matnda qiziqishini yozadi ("Claude limitlari va MCP
+  asboblari qiziq") → embed → item embedding bilan cosine.
+  Aralash ball: `0.6 * tag_match + 0.4 * cosine`.
+- **P3 — feedback loop:** 👍/👎 tugmalari → user embedding ni yoqqaniga yaqinlashtir,
+  yoqmaganidan uzoqlashtir + teg og'irliklarini sozla.
+
+---
+
+## 9. Yetkazish (delivery)
+
+- **instant** — faqat `importance >= 8`. Kam, lekin qimmatli (model chiqishi, limit o'zgarishi).
+- **daily** — user `timezone` idagi `digest_hour` da.
+- **weekly** — dushanba yig'masi.
+
+Telegram limit: global 30 msg/sek. 50 user uchun muammo yo'q, lekin baribir semaphore
+bilan yubor — keyin o'sganda qayta yozmaysan.
+
+---
+
+## 10. Fazalar
+
+### P0 — Skelet (2-3 kun)
+- Python loyiha (`uv`), SQLite (Postgres ga keyin `SQLAlchemy` bilan og'riqsiz ko'chadi)
+- 5 ta RSS manba hardcoded
+- `fetch → dedupe(url hash) → Gemini batch classify → console print`
+- O'zingga bitta Telegram xabar
+
+**Maqsad:** pipeline boshidan oxirigacha ishlaydi. Sifat hali muhim emas.
+
+### P1 — Multi-user MVP (~1 hafta)
+- Postgres + Alembic migration
+- aiogram bot: `/start`, `/topics`, `/freq`, `/pause`, `/stop`
+- `users`, `user_topics`, `deliveries` jadvallari
+- APScheduler: ingest 20 daqiqada, digest soatda bir (kimga vaqt kelganini tekshiradi)
+- Simhash dedupe
+- Importance threshold
+
+**Maqsad:** do'stlaring haqiqatan ishlatadi.
+
+### P2 — Sifat (~1 hafta)
+- Embedding dedupe + cluster
+- Mini App: teg tanlash UI, digest tarixi
+- 👍/👎 feedback tugmalari
+- `trafilatura` bilan to'liq matn extract (RSS ko'pincha faqat lead beradi)
+- Manba ishonch darajasi (trust scoring)
+
+### P3 — Chuqurlik (~1 hafta)
+- Active research agent (Gemini + `google_search` grounding), kunlik top-3
+- Embedding shaxsiylashtirish
+- Admin panel: manba qo'shish/o'chirish, LLM chiqishini ko'rish, user statistika, manual re-run
+- O'zbekcha summary (Gemini yaxshi uddalaydi)
+
+---
+
+## 11. Fayl strukturasi
+
+```
+Ogoh/
+  pyproject.toml
+  docker-compose.yml
+  .env.example
+  alembic/
+  src/ogoh/
+    config.py
+    taxonomy.py
+    scheduler.py            # APScheduler joblar
+    db/
+      models.py
+      session.py
+    sources/
+      base.py               # Source protocol: fetch() -> list[RawItem]
+      rss.py
+      hackernews.py
+      arxiv.py
+      github_releases.py
+      scrape/
+        anthropic.py
+        openai.py
+      registry.py
+    pipeline/
+      ingest.py
+      normalize.py          # url canonicalize + trafilatura extract
+      dedupe.py             # simhash + embedding cluster
+      enrich.py             # LLM batch classify + summarize
+      match.py              # user ↔ item
+      digest.py             # xabar yig'ish
+    llm/
+      base.py               # LLMProvider protocol
+      gemini.py
+      groq.py               # fallback
+      prompts.py
+    bot/
+      main.py               # aiogram
+      handlers/
+      keyboards.py
+    api/
+      main.py               # FastAPI: Mini App + admin
+      routes/
+  web/                      # Vite + React — /app (Mini App), /admin (panel)
+```
+
+---
+
+## 12. Xarajat hisobi
+
+Kuniga ~300 ta yangilik yig'iladi, prefilter dan keyin ~120 tasi LLM ga boradi.
+
+| Ish | Chaqiruv/kun |
+|---|---|
+| Classify + summarize (20 ta/batch) | ~6 |
+| Embedding (100 ta/batch) | ~2 |
+| Active research (top-3) | ~10 |
+| **Jami** | **~20** |
+
+Gemini free limit: **1500/kun**. Ishlatish: **~1%**.
+
+10-50 user uchun key rotatsiyasi kerak emas. Pul xarajati: faqat VPS ~€4/oy.
+
+---
+
+## 13. Xavflar (e'tibordan qochadiganlari)
+
+1. **Anthropic da RSS yo'q → scrape.** Ular sahifa HTML ini o'zgartirsa scraper buziladi
+   va **jimgina** 0 item qaytaradi. Bu eng yomon holat — xato ko'rinmaydi, shunchaki yangilik
+   kelmay qo'yadi. Yechim: har manbaga "0 item topildi" alerti qo'y.
+   *(P0 da `ingest_all` da amalga oshirilgan.)*
+
+2. **Arxiv feed lar.** ✅ *P0 da topildi va tuzatildi.* OpenAI feed i butun arxivini beradi —
+   2015 yildan boshlab 1036 ta item. Ikkita zarar: (a) birinchi ishga tushirish 10 yillik
+   tarixni enrich qiladi; (b) jiddiyrog'i — digest `fetched_at` bo'yicha filtrlagani uchun
+   arxivdagi hamma narsa "yangi" ko'rinadi va **2015 yilgi GPT e'loni importance=10 olib
+   birinchi digestni boshqaradi.**
+   Yechim: `max_age_days=14` ingest da + digest oynasi `coalesce(published_at, fetched_at)`
+   bo'yicha, `fetched_at` bo'yicha emas. Natija: 1122 → 103 item.
+3. **Dedupe ishlamasa** — user bir yangilikni 10 marta oladi, bir kunda chiqib ketadi.
+   Shuning uchun dedupe P1 da, P2 da emas.
+4. **LLM importance drift** — bir kuni hamma narsa 8, ertasi hammasi 4. Yechim: promptda
+   aniq rubric ber, bahoni *absolyut* qil, "bugungilar orasida" emas.
+   *(P0 da `llm/prompts.py` da amalga oshirilgan.)*
+5. **LLM batch dan kam verdict qaytaradi.** 20 ta item yuborib 19 ta javob olsang va
+   pozitsiya bo'yicha moslashtirsang — xulosalar siljiydi va **noto'g'ri maqolaga noto'g'ri
+   summary yopishadi.** Yechim: index bo'yicha moslashtir, yetishmaganini tashla.
+   *(P0 da `pipeline/enrich.py` da amalga oshirilgan.)*
+6. **Ikki instance ko'tarilsa** ingest ikki marta ketadi. `deliveries` PK yuborishni himoya
+   qiladi, lekin ingest uchun ham Postgres advisory lock qo'y.
+7. **Free tier shartlari o'zgaradi.** `LLMProvider` abstraksiyasi shuning uchun kerak.
+8. **Telegram bot token** — `.env`, `.gitignore`, hech qachon logga yozma.
+
+---
+
+## 14. Ochiq savollar (keyin hal qilinadi)
+
+- Summary tili: o'zbekcha, inglizcha, yoki user tanlaydi? (`users.lang` ustuni bor, lekin
+  P3 gacha ishlatilmaydi)
+- Retention: `raw_text` ni necha kundan keyin o'chirish? (taklif: 90 kun, metadata qoladi)
+- Manba qo'shishni userlarga ochish kerakmi, yoki faqat admin?

@@ -1,0 +1,27 @@
+[project]
+name = "ogoh"
+version = "0.1.0"
+description = "AI news aggregator with per-user interest filtering"
+requires-python = ">=3.12"
+dependencies = [
+    "feedparser>=6.0.11",
+    "httpx>=0.28",
+    "google-genai>=1.0",
+    "sqlalchemy>=2.0",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ogoh"]
+
+[project.scripts]
+ogoh = "ogoh.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
