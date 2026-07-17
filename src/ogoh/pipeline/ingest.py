@@ -84,9 +84,13 @@ def _upsert_source(session: Session, fetcher: SourceFetcher) -> Source:
 
 
 def _store(session: Session, source: Source, raw: RawItem) -> bool:
-    """Insert the item. Returns False when we have already seen the URL."""
+    """Insert the item. Returns False when we have already seen it."""
     canonical = canonicalize_url(raw.url)
-    digest = url_hash(canonical)
+
+    # A source that declares a uid is telling us its URLs do not distinguish its
+    # items; namespace it per source so two sources can't collide on a bare uid.
+    identity = f"{source.id}:{raw.uid}" if raw.uid else canonical
+    digest = url_hash(identity)
 
     if session.scalar(select(Item.id).where(Item.url_hash == digest)) is not None:
         return False

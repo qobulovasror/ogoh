@@ -13,6 +13,14 @@ class RawItem:
     author: str | None = None
     text: str | None = None
 
+    # Set this when the URL alone does not tell two items apart. A changelog page
+    # addresses each entry by anchor (…/release-notes/api#july-10-2026), and
+    # canonicalisation drops fragments — rightly, since for an article a fragment
+    # is noise — so every entry on that page would otherwise hash to one identity
+    # and the source would yield exactly one item, forever. When uid is set,
+    # ingest keys off it instead of the URL.
+    uid: str | None = None
+
 
 @runtime_checkable
 class SourceFetcher(Protocol):

@@ -1,8 +1,12 @@
-"""P0 runner: ingest -> enrich -> digest -> (optionally) Telegram.
+"""One-shot runner, for checking the pipeline without standing the bot up.
 
-    uv run ogoh              # fetch, enrich, print
-    uv run ogoh --send       # ... and send it to yourself
-    uv run ogoh --dry-run    # fetch only, no LLM calls
+    uv run ogoh --dry-run    # fetch and cluster only, no LLM calls
+    uv run ogoh              # ... enrich too, print the digest
+    uv run ogoh --send       # ... and send it to TELEGRAM_CHAT_ID
+
+The digest here is one shared list, not per-person: this is a diagnostic. Real
+delivery is `ogoh-bot`, which matches each subscriber's topics and records what
+it sent.
 """
 
 import argparse
@@ -11,11 +15,9 @@ import sys
 
 from ogoh.config import get_settings
 from ogoh.db.session import init_db, session_scope
-from ogoh.llm.gemini import GeminiProvider
-from ogoh.pipeline.digest import render_console, render_telegram, top_items
-from ogoh.pipeline.enrich import enrich_pending
-from ogoh.pipeline.ingest import ingest_all
 from ogoh.notify.telegram import send_message
+from ogoh.pipeline.digest import render_console, render_telegram, top_entries
+from ogoh.worker import run_pipeline
 
 log = logging.getLogger("ogoh")
 
@@ -37,43 +39,23 @@ def main() -> int:
     settings = get_settings()
     init_db()
 
+    if not args.dry_run and not settings.gemini_api_key:
+        log.error("GEMINI_API_KEY is not set — get one at https://aistudio.google.com/apikey")
+        return 1
+
+    run_pipeline(enrich_limit=args.limit, skip_llm=args.dry_run)
+
+    if args.dry_run:
+        log.info("dry run — stopped before the LLM step")
+        return 0
+
+    threshold = args.min_importance if args.min_importance is not None else settings.min_importance
+
     with session_scope() as session:
-        ingested = ingest_all(session)
-        log.info("ingest: %d new, %d already seen", ingested.new, ingested.duplicate)
-        if ingested.failed_sources:
-            log.error("sources that failed: %s", ", ".join(ingested.failed_sources))
-        if ingested.empty_sources:
-            log.warning("sources that returned nothing: %s", ", ".join(ingested.empty_sources))
-
-        if args.dry_run:
-            log.info("dry run — stopping before the LLM step")
-            return 0
-
-        if not settings.gemini_api_key:
-            log.error("GEMINI_API_KEY is not set — get one at https://aistudio.google.com/apikey")
-            return 1
-
-        provider = GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model)
-        enriched = enrich_pending(
-            session,
-            provider,
-            batch_size=settings.enrich_batch_size,
-            limit=args.limit,
-        )
-        log.info(
-            "enrich: %d items over %d LLM calls, %d skipped",
-            enriched.enriched,
-            enriched.batches,
-            enriched.skipped,
-        )
-
-        threshold = (
-            args.min_importance if args.min_importance is not None else settings.min_importance
-        )
-        rows = top_items(session, min_importance=threshold, limit=settings.digest_limit)
+        entries = top_entries(session, min_importance=threshold, limit=settings.digest_limit)
 
         print()
-        print(render_console(rows))
+        print(render_console(entries))
 
         if not args.send:
             return 0
@@ -85,9 +67,9 @@ def main() -> int:
         send_message(
             settings.telegram_bot_token,
             settings.telegram_chat_id,
-            render_telegram(rows),
+            render_telegram(entries),
         )
-        log.info("sent %d items to Telegram", len(rows))
+        log.info("sent %d items to Telegram", len(entries))
 
     return 0
 

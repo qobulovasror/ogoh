@@ -1,17 +1,15 @@
-"""P0 schema: sources, items, enrichment.
+"""Schema: sources, items, enrichment, users, subscriptions, deliveries.
 
 Tags and entities are JSON rather than a Postgres ARRAY so the same models run on
 SQLite now and on Postgres later without a rewrite. JSON maps to JSONB on
 Postgres, which indexes fine, so this is not a decision that has to be undone.
-
-users / user_topics / deliveries land in P1. `deliveries` in particular carries
-PRIMARY KEY(user_id, cluster_id) and is what makes double-sending impossible.
 """
 
 from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -61,6 +59,10 @@ class Item(Base):
     raw_text: Mapped[str | None] = mapped_column(Text)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+    # The id of this story's canonical item — its earliest publisher. An item
+    # that nobody else ran points at itself. NULL means dedupe hasn't seen it yet.
+    cluster_id: Mapped[int | None] = mapped_column(index=True)
+
     source: Mapped[Source] = relationship(back_populates="items")
     enrichment: Mapped["ItemEnrichment | None"] = relationship(
         back_populates="item", uselist=False
@@ -83,3 +85,59 @@ class ItemEnrichment(Base):
     enriched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     item: Mapped[Item] = relationship(back_populates="enrichment")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # Telegram ids exceed 2^31, so this must be BigInteger — the default Integer
+    # holds today's ids and silently overflows on newer accounts.
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(64))
+
+    lang: Mapped[str] = mapped_column(String(8), default="uz")
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Tashkent")
+
+    digest_mode: Mapped[str] = mapped_column(String(16), default="daily")  # see DIGEST_MODES
+    digest_hour: Mapped[int] = mapped_column(SmallInteger, default=9)
+    min_importance: Mapped[int] = mapped_column(SmallInteger, default=5)
+
+    # Without this a 20-minute scheduler would re-send a daily digest every 20
+    # minutes for the whole hour it is due — the deliveries ledger would keep the
+    # stories from repeating, but the reader still gets three empty-ish messages.
+    last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    topics: Mapped[list["UserTopic"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class UserTopic(Base):
+    __tablename__ = "user_topics"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    tag: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+    user: Mapped[User] = relationship(back_populates="topics")
+
+
+class Delivery(Base):
+    """The idempotency ledger.
+
+    PRIMARY KEY(user_id, cluster_id) is what actually makes it impossible to send
+    one person the same story twice. Every guard above this is a convenience; this
+    is the one that holds when the process dies mid-run or two instances race.
+    Keyed on cluster, not item, so a story republished by a second outlet does not
+    come round again.
+    """
+
+    __tablename__ = "deliveries"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    cluster_id: Mapped[int] = mapped_column(primary_key=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
