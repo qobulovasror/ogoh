@@ -45,6 +45,12 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
     settings = get_settings()
     stats = PipelineStats()
 
+    provider = (
+        GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model)
+        if settings.gemini_api_key and not skip_llm
+        else None
+    )
+
     with session_scope() as session:
         ingested = ingest_all(session)
         stats.new_items = ingested.new
@@ -54,9 +60,15 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
         if ingested.empty_sources:
             log.warning("sources that returned nothing: %s", ", ".join(ingested.empty_sources))
 
-        deduped = assign_clusters(session)
+        deduped = assign_clusters(session, provider)
         stats.stories = deduped.clustered
-        log.info("dedupe: %d stories, %d folded in", deduped.clustered, deduped.merged)
+        log.info(
+            "dedupe: %d stories, %d folded in (%d judged, %d of those merged)",
+            deduped.clustered,
+            deduped.merged + deduped.merged_by_model,
+            deduped.adjudicated,
+            deduped.merged_by_model,
+        )
 
         extracted = extract_pending(session)
         stats.extracted = extracted.improved
@@ -68,13 +80,11 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
                 extracted.failed,
             )
 
-        if skip_llm:
-            return stats
-        if not settings.gemini_api_key:
-            log.error("GEMINI_API_KEY is not set — skipping enrichment")
+        if provider is None:
+            if not skip_llm:
+                log.error("GEMINI_API_KEY is not set — skipping enrichment")
             return stats
 
-        provider = GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model)
         enriched = enrich_pending(
             session, provider, batch_size=settings.enrich_batch_size, limit=enrich_limit
         )

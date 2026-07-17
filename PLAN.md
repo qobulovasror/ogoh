@@ -145,8 +145,46 @@ Bir yangilikni 10 ta sayt yozadi. Dedupe ishlamasa user spam yeydi va chiqib ket
    *Ogohlantirish:* fragment tashlash changelog kabi anchor bilan adreslanadigan
    sahifalarni buzadi — har bir yozuv bitta hash ga tushadi. Shuning uchun `RawItem.uid`:
    manba kerak bo'lsa o'z identifikatorini o'zi e'lon qiladi.
-2. ~~**Simhash**~~ → **Jaccard** ✅ — *reja o'zgardi, sabab quyida.*
-3. **Embedding cosine** — 48 soatlik oyna ichida `> 0.88` bo'lsa bitta cluster. P2.
+2. ~~**Simhash**~~ → **Jaccard ≥ 0.85** ✅ — avtomatik qo'shish, sabab quyida.
+3. ~~**Embedding cosine > 0.88**~~ → **LLM hukmi** ✅ — *reja rad etildi, sabab quyida.*
+
+### Nega embedding emas, LLM (o'lchangan — reja rad etildi)
+
+Reja 3-daraja uchun `embedding cosine > 0.88` degan edi. O'lchadim:
+
+```
+                                                    jaccard   cosine
+ROST    "xai-org/grok-build, now open source"
+        "Grok Build is open source"                   0.67     0.942
+YOLGON  "sqlite-utils 4.1.1" / "sqlite-utils 4.0"     0.50     0.960
+```
+
+**Cosine da yolg'on juftlik rost juftlikdan yuqori.** Masofa: −0.018. To'liq matn
+qo'shsam yomonlashadi: −0.045. Ya'ni ishlaydigan chegara mavjud emas.
+
+Reja shu yerda nafaqat foydasiz, balki **zararli** edi: `> 0.88` ikkala relizni
+qo'shib yuborardi va ikkinchisi izsiz yo'qolardi.
+
+Sabab: embedding "bir xil **mavzu**" ni o'lchaydi. `4.1.1` va `4.0` haqiqatan bir
+xil mavzu — bir loyiha, bir turdagi e'lon. Embedding to'g'ri javob beryapti,
+faqat savol noto'g'ri berilgan.
+
+**LLM to'g'ri savolga javob beradi** — o'lchangan 8 juftlikda 8/8, ustiga sababini
+aytadi: "different software versions", "different products". Jonli ma'lumotda: 9 ta
+nomzoddan 1 tasini qo'shdi (`grok-build`, "Identical news about the same project"),
+8 tasini to'g'ri ajratdi.
+
+Shuning uchun o'xshashlik o'z o'rniga tushirildi — **nomzod taklif qilish**, hukm
+emas:
+
+```
+>= 0.85           deyarli aniq  -> darhol qo'shiladi, LLM chaqirilmaydi
+[0.45, 0.85)      noaniq        -> LLM hukm qiladi
+< 0.45            begona        -> tegilmaydi
+```
+
+Kuniga ~1 qo'shimcha chaqiruv. LLM yiqilsa yoki javob bermasa — juftlik ajratilgan
+holda qoladi: ko'rinadigan dubl, jimgina o'chirishdan yaxshiroq.
 
 ### Nega simhash emas, Jaccard (o'lchangan)
 

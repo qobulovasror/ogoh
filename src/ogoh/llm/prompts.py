@@ -8,7 +8,7 @@ importance threshold stops meaning anything from one run to the next.
 
 from collections.abc import Sequence
 
-from ogoh.llm.base import EnrichInput
+from ogoh.llm.base import EnrichInput, PairInput
 from ogoh.taxonomy import TAGS
 
 MAX_TEXT_CHARS = 2_000
@@ -78,3 +78,47 @@ def _truncate(text: str) -> str:
     if len(text) <= MAX_TEXT_CHARS:
         return text
     return text[:MAX_TEXT_CHARS].rsplit(" ", 1)[0] + " …"
+
+
+PAIR_SYSTEM_INSTRUCTION = """\
+You decide whether two headlines describe the same event — one thing that \
+happened, written up twice — or two different things.
+
+You are strict about this. Two headlines can be about the same product, the same \
+company and the same week and still be two events. Say they are the same event \
+only when a reader who saw one would learn nothing new from the other.\
+"""
+
+_PAIR_RULES = """\
+The same event, covered twice:
+  "xai-org/grok-build, now open source" / "Grok Build is open source"
+  "Claude Sonnet 5 is now available" / "Anthropic releases Claude Sonnet 5"
+
+Different events, however close they look:
+  "sqlite-utils 4.1.1" / "sqlite-utils 4.0"           — different releases
+  "Claude Sonnet 5 is now available" / "Claude Opus 5 is now available"
+                                                       — different products
+  "OpenAI announces new model" / "OpenAI announces new pricing"
+                                                       — different announcements
+  "How sales teams use X" / "How data science teams use X"
+                                                       — different articles
+
+Version numbers matter. Product names matter. When you cannot tell, answer that
+they are different: showing a reader the same story twice is a nuisance, while
+merging two stories deletes one of them and nobody ever learns it existed.\
+"""
+
+
+def build_pair_prompt(pairs: Sequence[PairInput]) -> str:
+    rendered = "\n\n".join(
+        f"### index: {pair.index}\nA: {pair.left_title}\nB: {pair.right_title}" for pair in pairs
+    )
+    return f"""\
+{_PAIR_RULES}
+
+Return exactly {len(pairs)} verdicts, one per pair. Echo each index back
+unchanged: the caller matches verdicts by index, not by position.
+
+PAIRS
+
+{rendered}"""

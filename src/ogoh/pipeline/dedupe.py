@@ -1,28 +1,34 @@
-"""Level-2 dedupe: fold near-identical headlines into one cluster.
+"""Fold reruns of one story into a single cluster.
 
 Level 1 — the canonical URL hash in ingest — catches the same URL arriving twice.
-This catches the same story republished under a near-identical headline.
+This catches the same story republished elsewhere, in two passes:
 
-On the threshold. Measured over a live sample of 99 items, true and false
-duplicate pairs sit only 0.17 apart:
+  >= THRESHOLD          near-certain. Merged on the spot, no model involved.
+  [CANDIDATE, THRESHOLD) too close to call. Handed to the model to adjudicate.
+  < CANDIDATE            left alone.
 
-    0.67  "xai-org/grok-build, now open source" / "Grok Build is open source"
-          -> the same story, two sources
-    0.50  "How sales teams use ChatGPT Work" / "How data science teams use
-          ChatGPT Work" -> different articles in one series
+Why a model and not a similarity number. Measured over live pairs, no threshold
+of any kind separates these two cases:
 
-A mid-range threshold would be a coin flip on any other day's distribution, so
-this merges only what is near-certain and accepts the misses. The asymmetry
-decides it: a false merge silently deletes a story the reader never learns was
-published, while a false split only shows them the same thing twice. Semantic
-pairs like the grok-build one need embeddings — that is P2's job, not a threshold
-tuned against one afternoon's news.
+    same story    "xai-org/grok-build, now open source" / "Grok Build is open source"
+                  jaccard 0.67   cosine 0.942
+    different     "sqlite-utils 4.1.1" / "sqlite-utils 4.0"
+                  jaccard 0.50   cosine 0.960
 
-Simhash, which the plan originally called for, is the wrong tool here. It earns
-its keep on long documents and on corpora big enough to need LSH banding. These
-are headlines — a handful of tokens — and one run compares ~100 new items against
-a couple of hundred recent ones. Brute-force set overlap is both more accurate on
-short strings and completely free at this size.
+Lexically the true pair scores higher; by embedding the false one does. The plan
+called for embeddings at cosine > 0.88, and that is worse than useless here — it
+would merge two distinct releases and the second would vanish without trace.
+Embeddings answer "same topic", and 4.1.1 and 4.0 genuinely are the same topic.
+Nobody asked them the right question.
+
+The model answers the right question, 8/8 on the measured pairs, and says why:
+"different software versions", "different products". So similarity is demoted to
+what it is good at — proposing candidates cheaply — and the judgement goes to the
+thing that can actually make it. Costs about one extra call a day.
+
+Simhash, which the plan also called for, earns its keep on long documents and
+corpora needing LSH. These are headlines, and one run compares ~30 new items
+against a few hundred. Set overlap is more accurate on short strings and free.
 """
 
 import logging
@@ -36,10 +42,20 @@ from sqlalchemy.orm import Session
 
 from ogoh.config import get_settings
 from ogoh.db.models import Item
+from ogoh.llm.base import LLMProvider, PairInput
 
 log = logging.getLogger(__name__)
 
+# Merge without asking. Only typographic and near-verbatim reruns reach this.
 THRESHOLD = 0.85
+
+# Worth asking about. Below this the pair shares a couple of words and nothing
+# else; every measured true duplicate sits at 0.5 or above.
+CANDIDATE = 0.45
+
+# One prompt's worth. A day of news produces a handful of candidates, so this is
+# a runaway guard, not a real limit.
+MAX_PAIRS_PER_RUN = 40
 
 # Versions stay whole: splitting "4.1.1" into digits made it identical to "4.0"
 # once stop-word filtering removed the parts, merging three distinct releases.
@@ -58,16 +74,23 @@ _STOPWORDS = frozenset(
 class DedupeStats:
     clustered: int = 0
     merged: int = 0
+    adjudicated: int = 0
+    merged_by_model: int = 0
 
 
-def assign_clusters(session: Session, within_hours: int | None = None) -> DedupeStats:
+def assign_clusters(
+    session: Session,
+    provider: LLMProvider | None = None,
+    within_hours: int | None = None,
+) -> DedupeStats:
     """Cluster every stored item, not just the ones today's digest would show.
 
-    The window defaults to everything ingest keeps. Tying it to a narrower span —
-    48h, say, to match a daily digest — leaves older items with a NULL cluster,
-    and then a weekly subscriber gets served the duplicates that were never
-    compared. The comparison is set overlap over a few hundred items; making it
-    exhaustive costs nothing and removes the whole class of window-mismatch bugs.
+    The window defaults to everything ingest retains. Tying it to a narrower span
+    — 48h, say, to match a daily digest — leaves older items with a NULL cluster,
+    and then a weekly subscriber is served the duplicates nobody compared.
+
+    Without a provider the lexical pass runs alone and the ambiguous pairs are
+    left as separate stories, which is the safe direction to fail in.
     """
     hours = within_hours if within_hours is not None else get_settings().max_age_days * 24
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
@@ -80,7 +103,8 @@ def assign_clusters(session: Session, within_hours: int | None = None) -> Dedupe
     ).all()
 
     stats = DedupeStats()
-    seen: list[tuple[frozenset[str], int]] = []
+    seen: list[tuple[frozenset[str], int, str]] = []
+    ambiguous: list[tuple[Item, int, str]] = []
 
     for item in candidates:
         tokens = title_tokens(item.title)
@@ -89,32 +113,96 @@ def assign_clusters(session: Session, within_hours: int | None = None) -> Dedupe
         # matchable, so a rerun published tomorrow still finds today's story.
         if item.cluster_id is not None:
             if tokens:
-                seen.append((tokens, item.cluster_id))
+                seen.append((tokens, item.cluster_id, item.title))
             continue
 
         if not tokens:
             item.cluster_id = item.id
             continue
 
-        match = _closest(tokens, seen)
-        if match is None:
-            item.cluster_id = item.id
-            seen.append((tokens, item.id))
-            stats.clustered += 1
-        else:
-            item.cluster_id = match
+        best_cluster, best_title, best_score = _closest(tokens, seen)
+
+        if best_score >= THRESHOLD:
+            item.cluster_id = best_cluster
             stats.merged += 1
-            log.info("dedupe: %r folded into cluster %d", item.title, match)
+            log.info("dedupe: %r folded into cluster %d", item.title, best_cluster)
+            continue
+
+        # Stands alone for now. If the model later says otherwise this is
+        # reassigned below — safe only because dedupe runs before enrichment, so
+        # nothing has been scored, shown or delivered under this id yet.
+        item.cluster_id = item.id
+        seen.append((tokens, item.id, item.title))
+        stats.clustered += 1
+
+        if best_score >= CANDIDATE:
+            ambiguous.append((item, best_cluster, best_title))
 
     session.flush()
+
+    if ambiguous and provider is not None:
+        _adjudicate(session, provider, ambiguous, stats)
+        session.flush()
+
     return stats
 
 
-def _closest(tokens: frozenset[str], seen: list[tuple[frozenset[str], int]]) -> int | None:
-    for other_tokens, cluster_id in seen:
-        if jaccard(tokens, other_tokens) >= THRESHOLD:
-            return cluster_id
-    return None
+def _adjudicate(
+    session: Session,
+    provider: LLMProvider,
+    ambiguous: list[tuple[Item, int, str]],
+    stats: DedupeStats,
+) -> None:
+    batch = ambiguous[:MAX_PAIRS_PER_RUN]
+    if len(ambiguous) > MAX_PAIRS_PER_RUN:
+        log.warning(
+            "dedupe: %d ambiguous pairs, judging %d — the rest stay separate this run",
+            len(ambiguous),
+            MAX_PAIRS_PER_RUN,
+        )
+
+    pairs = [
+        PairInput(index=position, left_title=item.title, right_title=other_title)
+        for position, (item, _, other_title) in enumerate(batch)
+    ]
+
+    try:
+        verdicts = provider.judge_pairs(pairs)
+    except Exception:
+        # Failing here leaves the pairs as separate stories: a duplicate the
+        # reader can see, rather than a merge nobody can.
+        log.exception("dedupe: could not judge %d pairs; leaving them separate", len(pairs))
+        return
+
+    stats.adjudicated = len(batch)
+    by_index = {verdict.index: verdict for verdict in verdicts}
+
+    for position, (item, other_cluster, other_title) in enumerate(batch):
+        verdict = by_index.get(position)
+        if verdict is None or not verdict.same_event:
+            continue
+        item.cluster_id = other_cluster
+        stats.clustered -= 1
+        stats.merged_by_model += 1
+        log.info(
+            "dedupe: model folded %r into cluster %d (%s)",
+            item.title,
+            other_cluster,
+            verdict.reason or "same event",
+        )
+
+
+def _closest(
+    tokens: frozenset[str], seen: list[tuple[frozenset[str], int, str]]
+) -> tuple[int | None, str, float]:
+    best_cluster: int | None = None
+    best_title = ""
+    best_score = 0.0
+    for other_tokens, cluster_id, title in seen:
+        score = jaccard(tokens, other_tokens)
+        if score > best_score:
+            best_cluster, best_title, best_score = cluster_id, title, score
+    return best_cluster, best_title, best_score
 
 
 def title_tokens(title: str) -> frozenset[str]:
