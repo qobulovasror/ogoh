@@ -86,6 +86,63 @@ def _truncate(text: str) -> str:
     return text[:MAX_TEXT_CHARS].rsplit(" ", 1)[0] + " …"
 
 
+RESEARCH_SYSTEM_INSTRUCTION = """\
+You write the one paragraph a busy engineer reads about the day's biggest story \
+in AI. You are given every article we hold about it, and the earlier stories \
+about the same organisations and products.
+
+You work only from what you are given. You never reach for what you think you \
+remember about these companies — if the sources do not say it, it does not go in. \
+Where they disagree, say so. Where the answer is not there, leave the question \
+open rather than filling it.\
+"""
+
+_RESEARCH_RULES = """\
+Write about 120 words, no headings, no bullets. Cover, in prose:
+
+  What happened, precisely. Versions, names, numbers, dates.
+  What changed against what came before — this is the part the summary cannot
+  do, and the background below is the only place it exists.
+  Who it affects, concretely: someone already building on these APIs.
+  What is still unknown, if the sources leave something open.
+
+No marketing register. No "exciting", no "game-changing", no framing the reader
+has to discount. If the story turns out to be an incremental update dressed as a
+launch, say that plainly — it is the most useful thing you could tell them.\
+"""
+
+
+def build_research_prompt(payload) -> str:
+    coverage = "\n\n".join(
+        f"--- {source.source}: {source.title}\n{source.text}" for source in payload.coverage
+    )
+    background = (
+        "\n".join(
+            f"  {source.published or 'undated'} — {source.title} ({source.source}): {source.text}"
+            for source in payload.background
+        )
+        or "  (nothing earlier about these names in the last month)"
+    )
+
+    return f"""\
+{_RESEARCH_RULES}
+
+Write it twice: `body` in English, `body_uz` in Uzbek, latin script — a natural
+rendering, not word-for-word, with technical terms, product names and version
+numbers left exactly as they are.
+
+STORY: {payload.headline}
+NAMES: {", ".join(payload.entities) or "(none extracted)"}
+
+COVERAGE — every article we hold about this story:
+
+{coverage}
+
+BACKGROUND — earlier stories about the same names, oldest facts first:
+
+{background}"""
+
+
 PAIR_SYSTEM_INSTRUCTION = """\
 You decide whether two headlines describe the same event — one thing that \
 happened, written up twice — or two different things.

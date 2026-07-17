@@ -3,12 +3,21 @@ import logging
 from google import genai
 from pydantic import BaseModel, Field
 
-from ogoh.llm.base import EnrichInput, PairInput, PairVerdict, Verdict
+from ogoh.llm.base import (
+    EnrichInput,
+    PairInput,
+    PairVerdict,
+    ResearchInput,
+    ResearchResult,
+    Verdict,
+)
 from ogoh.llm.prompts import (
     PAIR_SYSTEM_INSTRUCTION,
+    RESEARCH_SYSTEM_INSTRUCTION,
     SYSTEM_INSTRUCTION,
     build_classify_prompt,
     build_pair_prompt,
+    build_research_prompt,
 )
 
 log = logging.getLogger(__name__)
@@ -37,6 +46,11 @@ class _PairVerdict(BaseModel):
 
 class _PairBatch(BaseModel):
     verdicts: list[_PairVerdict]
+
+
+class _Research(BaseModel):
+    body: str
+    body_uz: str = ""
 
 
 class GeminiProvider:
@@ -95,3 +109,18 @@ class GeminiProvider:
             PairVerdict(index=v.index, same_event=v.same_event, reason=v.reason.strip())
             for v in batch.verdicts
         ]
+
+    def research(self, payload: ResearchInput) -> ResearchResult:
+        interaction = self._client.interactions.create(
+            model=self.model,
+            input=build_research_prompt(payload),
+            system_instruction=RESEARCH_SYSTEM_INSTRUCTION,
+            generation_config={"temperature": 0.2},
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": _Research.model_json_schema(),
+            },
+        )
+        result = _Research.model_validate_json(interaction.output_text)
+        return ResearchResult(body=result.body.strip(), body_uz=result.body_uz.strip())

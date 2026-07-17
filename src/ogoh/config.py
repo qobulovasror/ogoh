@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # decade of history and the first digest is all decade-old launches.
     max_age_days: int = 14
 
+    # Deep dives per pipeline tick. The day yields one or two stories at
+    # importance 8+, and each already-written one is skipped, so this is a
+    # runaway guard rather than a real budget.
+    research_per_run: int = 1
+
 
 @lru_cache
 def get_settings() -> Settings:

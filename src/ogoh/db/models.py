@@ -164,6 +164,22 @@ class Delivery(Base):
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ClusterResearch(Base):
+    """The deep dive on one story.
+
+    Keyed by cluster, written once. Nothing here re-reads a story we have already
+    written up: the run costs a call and the news has not changed since morning.
+    """
+
+    __tablename__ = "cluster_research"
+
+    cluster_id: Mapped[int] = mapped_column(primary_key=True)
+    body: Mapped[str] = mapped_column(Text)
+    body_uz: Mapped[str | None] = mapped_column(Text)
+    model_used: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Feedback(Base):
     """What a reader thought of a story.
 

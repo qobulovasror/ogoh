@@ -19,7 +19,7 @@ from html import escape
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ogoh.db.models import Item, ItemEnrichment, Source
+from ogoh.db.models import ClusterResearch, Item, ItemEnrichment, Source
 from ogoh.taxonomy import LABELS_UZ
 
 
@@ -28,6 +28,7 @@ class DigestEntry:
     item: Item
     enrichment: ItemEnrichment
     also_covered_by: int = 0
+    research: ClusterResearch | None = None
 
 
 def as_utc(value: datetime) -> datetime:
@@ -81,7 +82,11 @@ def top_entries(
         )
 
     entries.sort(key=lambda entry: (-entry.enrichment.importance, -_recency(entry.item)))
-    return entries[:limit]
+    entries = entries[:limit]
+
+    for entry in entries:
+        entry.research = session.get(ClusterResearch, entry.item.cluster_id or entry.item.id)
+    return entries
 
 
 def _recency(item: Item) -> float:
@@ -117,9 +122,17 @@ def render_telegram(entries: Sequence[DigestEntry], lang: str = "uz") -> str:
             f"<b>{position}.</b> <b>{entry.enrichment.importance}/10</b> — "
             f'<a href="{escape(entry.item.url)}">{escape(entry.item.title)}</a>\n'
             f"{escape(summary_for(entry.enrichment, lang))}\n"
+            f"{_research_block(entry, lang)}"
             f"<i>{escape(meta)}</i>"
         )
     return "\n\n".join(blocks)
+
+
+def _research_block(entry: DigestEntry, lang: str) -> str:
+    if entry.research is None:
+        return ""
+    body = entry.research.body_uz if lang == "uz" and entry.research.body_uz else entry.research.body
+    return f"\n<blockquote expandable>{escape(body)}</blockquote>\n"
 
 
 def render_console(entries: Sequence[DigestEntry]) -> str:

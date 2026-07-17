@@ -21,6 +21,28 @@ class Verdict:
 
 
 @dataclass(slots=True)
+class ResearchSource:
+    source: str
+    title: str
+    text: str
+    published: str = ""
+
+
+@dataclass(slots=True)
+class ResearchInput:
+    headline: str
+    entities: list[str]
+    coverage: list[ResearchSource]
+    background: list[ResearchSource]
+
+
+@dataclass(slots=True)
+class ResearchResult:
+    body: str
+    body_uz: str = ""
+
+
+@dataclass(slots=True)
 class PairInput:
     index: int
     left_title: str
@@ -52,4 +74,8 @@ class LLMProvider(Protocol):
 
         Same index contract as classify_batch: match by index, never by position.
         """
+        ...
+
+    def research(self, payload: ResearchInput) -> ResearchResult:
+        """Write up one story in depth, from its coverage and its run-up."""
         ...

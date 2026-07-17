@@ -20,6 +20,7 @@ from ogoh.pipeline.enrich import enrich_pending
 from ogoh.pipeline.extract import extract_pending
 from ogoh.pipeline.ingest import ingest_all
 from ogoh.pipeline.match import is_due, pending_for_user
+from ogoh.pipeline.research import research_top_stories
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class PipelineStats:
     stories: int = 0
     extracted: int = 0
     enriched: int = 0
+    researched: int = 0
 
 
 def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> PipelineStats:
@@ -96,6 +98,14 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
             enriched.batches,
             enriched.skipped,
         )
+
+        # Gated by the cluster already having a write-up rather than by a clock:
+        # the day's biggest story gets its deep dive when it lands, not at some
+        # hour that may be before it happened.
+        researched = research_top_stories(session, provider, limit=settings.research_per_run)
+        stats.researched = researched.written
+        if researched.written:
+            log.info("research: wrote up %d stories", researched.written)
 
     return stats
 
