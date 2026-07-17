@@ -80,6 +80,18 @@ def _upsert_source(session: Session, fetcher: SourceFetcher) -> Source:
         )
         session.add(source)
         session.flush()
+        return source
+
+    # The registry is the source of truth, so re-tiering a source or moving its
+    # feed has to reach the row. Writing these only on insert means the code says
+    # one thing and every database that already ran says another.
+    if source.trust_tier != fetcher.trust_tier:
+        log.info(
+            "source %r re-tiered %d -> %d", fetcher.name, source.trust_tier, fetcher.trust_tier
+        )
+        source.trust_tier = fetcher.trust_tier
+    source.url = fetcher.url
+    source.kind = fetcher.kind
     return source
 
 

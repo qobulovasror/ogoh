@@ -1,7 +1,14 @@
-"""Digest assembly: the best item per story, ranked.
+"""Digest assembly: one entry per story, most authoritative source first.
 
-One shared list for now. Per-user matching lands with the bot — that is where
-user_topics and the deliveries ledger come in.
+Two rankings, deliberately separate. Within a story the most trusted source
+speaks — Anthropic's own release note outranks a rewrite of it, whoever happened
+to publish first. Across stories, importance decides the order.
+
+Note what this does *not* do: pick a new canonical and write it back to
+`Item.cluster_id`. That column is the key of the deliveries ledger. Moving it
+would make every already-sent story look unsent, and everyone would get their
+week over again. Cluster identity is permanent; presentation is decided here,
+per render.
 """
 
 from collections.abc import Sequence
@@ -12,7 +19,7 @@ from html import escape
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ogoh.db.models import Item, ItemEnrichment
+from ogoh.db.models import Item, ItemEnrichment, Source
 from ogoh.taxonomy import LABELS_UZ
 
 
@@ -21,6 +28,16 @@ class DigestEntry:
     item: Item
     enrichment: ItemEnrichment
     also_covered_by: int = 0
+
+
+def as_utc(value: datetime) -> datetime:
+    """SQLite has no timestamptz.
+
+    DateTime(timezone=True) round-trips through it as a naive value, and mixing
+    that with an aware one raises TypeError. Postgres returns these aware, so
+    this has to cope with both.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def top_entries(
@@ -37,8 +54,9 @@ def top_entries(
     published = func.coalesce(Item.published_at, Item.fetched_at)
 
     stmt = (
-        select(Item, ItemEnrichment)
+        select(Item, ItemEnrichment, Source.trust_tier)
         .join(ItemEnrichment, ItemEnrichment.item_id == Item.id)
+        .join(Source, Source.id == Item.source_id)
         .where(ItemEnrichment.importance >= min_importance)
         .where(published >= cutoff)
         .order_by(ItemEnrichment.importance.desc(), published.desc())
@@ -47,24 +65,27 @@ def top_entries(
         .limit(limit * 5)
     )
 
-    entries: list[DigestEntry] = []
-    by_cluster: dict[int, DigestEntry] = {}
+    clusters: dict[int, list[tuple[Item, ItemEnrichment, int]]] = {}
+    for item, enrichment, trust_tier in session.execute(stmt).all():
+        clusters.setdefault(item.cluster_id or item.id, []).append((item, enrichment, trust_tier))
 
-    for item, enrichment in session.execute(stmt).all():
-        cluster = item.cluster_id or item.id
-        existing = by_cluster.get(cluster)
-        if existing is not None:
-            # Already have this story from a higher-ranked source; just note the
-            # extra coverage.
-            existing.also_covered_by += 1
-            continue
-        if len(entries) >= limit:
-            continue
-        entry = DigestEntry(item=item, enrichment=enrichment)
-        by_cluster[cluster] = entry
-        entries.append(entry)
+    entries = []
+    for members in clusters.values():
+        # Lower tier is more authoritative. Between two equally trusted sources
+        # the one who broke the story wins — without an explicit tiebreak this
+        # falls to fetch order, which means whoever published last.
+        members.sort(key=lambda member: (member[2], _recency(member[0])))
+        item, enrichment, _ = members[0]
+        entries.append(
+            DigestEntry(item=item, enrichment=enrichment, also_covered_by=len(members) - 1)
+        )
 
-    return entries
+    entries.sort(key=lambda entry: (-entry.enrichment.importance, -_recency(entry.item)))
+    return entries[:limit]
+
+
+def _recency(item: Item) -> float:
+    return as_utc(item.published_at or item.fetched_at).timestamp()
 
 
 def render_telegram(entries: Sequence[DigestEntry]) -> str:

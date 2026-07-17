@@ -16,6 +16,18 @@ from ogoh.sources.base import SourceFetcher
 from ogoh.sources.changelog import ClaudeReleaseNotes
 from ogoh.sources.rss import RssSource
 
+# trust_tier answers one question: when several sources carry the same story,
+# whose telling do we show? Not "which source is best" — Simon Willison writes
+# better than most first-party blogs. It is about who is speaking with authority
+# about *this* news.
+#
+#   1  first-party. The organisation announcing its own work.
+#   2  expert secondary. Reads the primary source and adds something.
+#   3  press and aggregators. Reports on what tier 1 said.
+#
+# Getting this wrong is quiet: OpenAI's own GPT-Live announcement lost the slot
+# to a blog post about it, because both were marked tier 1 and the tie fell to
+# whoever published later.
 FETCHERS: tuple[SourceFetcher, ...] = (
     ClaudeReleaseNotes(),
     RssSource(
@@ -24,13 +36,9 @@ FETCHERS: tuple[SourceFetcher, ...] = (
         trust_tier=1,
     ),
     RssSource("OpenAI News", "https://openai.com/news/rss.xml", trust_tier=1),
-    RssSource("Simon Willison", "https://simonwillison.net/atom/everything/", trust_tier=1),
-    RssSource("Hugging Face blog", "https://huggingface.co/blog/feed.xml", trust_tier=2),
+    RssSource("Hugging Face blog", "https://huggingface.co/blog/feed.xml", trust_tier=1),
+    RssSource("Simon Willison", "https://simonwillison.net/atom/everything/", trust_tier=2),
     RssSource("Ars Technica AI", "https://arstechnica.com/ai/feed/", trust_tier=2),
-    RssSource("Hacker News 100+", "https://hnrss.org/frontpage?points=100", trust_tier=2),
-    RssSource(
-        "TechCrunch AI",
-        "https://techcrunch.com/category/artificial-intelligence/feed/",
-        trust_tier=3,
-    ),
+    RssSource("TechCrunch AI", "https://techcrunch.com/category/artificial-intelligence/feed/", trust_tier=3),
+    RssSource("Hacker News 100+", "https://hnrss.org/frontpage?points=100", trust_tier=3),
 )

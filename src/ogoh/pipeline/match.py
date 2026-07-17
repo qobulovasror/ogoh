@@ -7,14 +7,14 @@ row you can point at rather than a cosine.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ogoh.db.models import Delivery, User
-from ogoh.pipeline.digest import DigestEntry, top_entries
+from ogoh.pipeline.digest import DigestEntry, as_utc, top_entries
 
 log = logging.getLogger(__name__)
 
@@ -75,26 +75,13 @@ def is_due(user: User, now: datetime) -> bool:
     if user.digest_mode == "weekly" and local.weekday() != 0:
         return False
 
-    last = as_utc(user.last_digest_at)
-    if last is None:
+    if user.last_digest_at is None:
         return True
 
     # The scheduler fires every 20 minutes, so the due hour comes round three
     # times. Without this gap check the reader gets three digests each morning.
     gap = timedelta(days=6) if user.digest_mode == "weekly" else timedelta(hours=23)
-    return now - last >= gap
-
-
-def as_utc(value: datetime | None) -> datetime | None:
-    """SQLite has no timestamptz.
-
-    DateTime(timezone=True) round-trips through it as a naive value, and
-    subtracting a naive datetime from an aware one raises TypeError. Postgres
-    returns these aware, so this has to cope with both.
-    """
-    if value is None:
-        return None
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return now - as_utc(user.last_digest_at) >= gap
 
 
 def _zone(name: str) -> ZoneInfo:
