@@ -1,6 +1,5 @@
 from datetime import UTC, datetime, timedelta
 
-import pytest
 
 from ogoh.pipeline.match import INSTANT_MIN_IMPORTANCE, is_due, pending_for_user
 

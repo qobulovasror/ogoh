@@ -5,7 +5,7 @@ KEY(user_id, cluster_id) is what holds when the process dies mid-run or two
 instances race, and these tests are what say so.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
