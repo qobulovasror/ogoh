@@ -36,9 +36,29 @@ FETCHERS: tuple[SourceFetcher, ...] = (
         trust_tier=1,
     ),
     RssSource("OpenAI News", "https://openai.com/news/rss.xml", trust_tier=1),
+    RssSource("Google AI blog", "https://blog.google/technology/ai/rss/", trust_tier=1),
     RssSource("Hugging Face blog", "https://huggingface.co/blog/feed.xml", trust_tier=1),
+    # The arXiv API answers in Atom, so it needs no code of its own.
+    RssSource(
+        "arXiv cs.AI",
+        "http://export.arxiv.org/api/query?search_query=cat:cs.AI+OR+cat:cs.CL"
+        "&sortBy=submittedDate&sortOrder=descending&max_results=30",
+        trust_tier=2,
+    ),
     RssSource("Simon Willison", "https://simonwillison.net/atom/everything/", trust_tier=2),
     RssSource("Ars Technica AI", "https://arstechnica.com/ai/feed/", trust_tier=2),
+    RssSource(
+        "The Verge AI",
+        "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+        trust_tier=3,
+    ),
     RssSource("TechCrunch AI", "https://techcrunch.com/category/artificial-intelligence/feed/", trust_tier=3),
     RssSource("Hacker News 100+", "https://hnrss.org/frontpage?points=100", trust_tier=3),
+    # One Reddit feed, not the two the plan listed. Reddit rate-limits by IP —
+    # not per subreddit — and the window measured at roughly 15 seconds: a second
+    # feed fetched right after the first gets a 429 and comes back empty, and no
+    # retry short of a 15-second sleep clears it. That is 15 seconds of every run
+    # spent asleep, 18 minutes a day, to collect community chatter. r/LocalLLaMA
+    # is the half that carries real open-weights news, so it is the half kept.
+    RssSource("Reddit LocalLLaMA", "https://www.reddit.com/r/LocalLLaMA/.rss", trust_tier=3),
 )

@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from datetime import UTC, datetime
 
 import feedparser
@@ -10,6 +11,16 @@ log = logging.getLogger(__name__)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+
+# One retry when a feed comes back with nothing, so that a blip does not get
+# reported as a dead source. "This source returned nothing" is the alert that
+# catches a feed going quietly to sleep — DeepMind's has been empty for months —
+# and an alert that fires spuriously is one everybody learns to scroll past.
+#
+# It costs a pause only when a source is already empty, which should never be
+# the normal case.
+_RETRIES = 1
+_RETRY_PAUSE_SECONDS = 3.0
 
 
 class RssSource:
@@ -24,6 +35,13 @@ class RssSource:
 
     def fetch(self) -> list[RawItem]:
         feed = feedparser.parse(self.url)
+
+        for attempt in range(_RETRIES):
+            if feed.entries:
+                break
+            log.debug("%s: no entries, retrying in %ss", self.name, _RETRY_PAUSE_SECONDS)
+            time.sleep(_RETRY_PAUSE_SECONDS * (attempt + 1))
+            feed = feedparser.parse(self.url)
 
         # feedparser sets bozo on malformed XML but still parses what it can, so a
         # bozo feed with entries is worth keeping. Only the entry count decides.
