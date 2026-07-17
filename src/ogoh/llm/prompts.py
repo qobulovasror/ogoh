@@ -62,7 +62,13 @@ ENTITIES — the organisations, models, or products the item is actually about,
 for example "Anthropic", "Claude", "MCP". At most 5. Empty list if none apply.
 
 SUMMARY — one or two sentences. What happened, and what it changes for someone
-building on these APIs.
+building on these APIs. Write it twice:
+
+  summary     — English.
+  summary_uz  — Uzbek, latin script. A natural rendering, not a word-for-word
+                translation. Leave technical terms, product names and version
+                numbers exactly as they are: Claude Sonnet 5, API, rate limit,
+                open-weights, expires_at.
 
 Return exactly {len(items)} verdicts, one per item. Echo each item's index back
 unchanged: the caller matches verdicts to items by index, not by position.

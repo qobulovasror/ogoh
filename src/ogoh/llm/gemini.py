@@ -18,6 +18,7 @@ class _Verdict(BaseModel):
     index: int
     importance: int = Field(ge=0, le=10)
     summary: str
+    summary_uz: str = ""
     tags: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
 
@@ -65,6 +66,7 @@ class GeminiProvider:
                 index=verdict.index,
                 importance=verdict.importance,
                 summary=verdict.summary.strip(),
+                summary_uz=verdict.summary_uz.strip(),
                 tags=verdict.tags,
                 entities=verdict.entities,
             )

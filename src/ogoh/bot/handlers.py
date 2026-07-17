@@ -19,11 +19,14 @@ from sqlalchemy.orm import Session
 from ogoh.bot.keyboards import (
     DONE,
     FREQ_PREFIX,
+    LANG_PREFIX,
     TOPIC_PREFIX,
     VOTE_PREFIX,
     feedback_keyboard,
     freq_keyboard,
     freq_label,
+    lang_keyboard,
+    lang_label,
     topics_keyboard,
 )
 from ogoh.db.models import Feedback, User, UserTopic
@@ -43,6 +46,7 @@ _WELCOME = (
     "<b>/topics</b> — qaysi mavzular qiziq\n"
     "<b>/freq</b> — qanchalik tez-tez xabar berish\n"
     "<b>/preview</b> — hozir nima bor, ko'rib ol\n"
+    "<b>/lang</b> — xulosalar tili\n"
     "<b>/pause</b> — vaqtincha to'xtatish\n"
     "<b>/stop</b> — butunlay o'chirish\n\n"
     "Hozircha barcha mavzular yoqilgan. <b>/topics</b> bilan toraytir."
@@ -152,7 +156,7 @@ async def handle_preview(message: Message) -> None:
     with session_scope() as session:
         user = _get_or_create(session, message.from_user.id, message.from_user.username)
         entries = pending_for_user(session, user, limit=5)
-        text = render_telegram(entries)
+        text = render_telegram(entries, lang=user.lang)
         keyboard = feedback_keyboard(entries)
     await message.answer(text, reply_markup=keyboard)
 
@@ -195,6 +199,34 @@ async def handle_vote(callback: CallbackQuery) -> None:
             existing.created_at = datetime.now(UTC)
 
     await callback.answer("Rahmat 👍" if vote == 1 else "Qayd etildi 👎")
+
+
+@router.message(Command("lang"))
+async def handle_lang(message: Message) -> None:
+    if message.from_user is None:
+        return
+    with session_scope() as session:
+        user = _get_or_create(session, message.from_user.id, message.from_user.username)
+        current = user.lang
+    await message.answer("Xulosalar tili?", reply_markup=lang_keyboard(current))
+
+
+@router.callback_query(F.data.startswith(f"{LANG_PREFIX}:"))
+async def handle_lang_set(callback: CallbackQuery) -> None:
+    if callback.from_user is None or not isinstance(callback.data, str):
+        return
+    code = callback.data.split(":", 1)[1]
+    if code not in ("uz", "en"):
+        await callback.answer("Noma'lum til")
+        return
+
+    with session_scope() as session:
+        user = _get_or_create(session, callback.from_user.id, callback.from_user.username)
+        user.lang = code
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(f"Til: <b>{lang_label(code)}</b>")
+    await callback.answer()
 
 
 @router.message(Command("pause"))

@@ -72,6 +72,7 @@ def enrich_pending(
                     entities=verdict.entities[:5],
                     importance=verdict.importance,
                     summary=verdict.summary,
+                    summary_uz=verdict.summary_uz or None,
                     model_used=provider.model,
                     enriched_at=datetime.now(UTC),
                 )

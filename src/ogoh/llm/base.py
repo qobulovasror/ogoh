@@ -15,6 +15,7 @@ class Verdict:
     index: int
     importance: int
     summary: str
+    summary_uz: str = ""
     tags: list[str] = field(default_factory=list)
     entities: list[str] = field(default_factory=list)
 

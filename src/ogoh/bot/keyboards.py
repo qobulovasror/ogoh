@@ -8,6 +8,7 @@ from ogoh.taxonomy import TAGS
 TOPIC_PREFIX = "topic"
 FREQ_PREFIX = "freq"
 VOTE_PREFIX = "vote"
+LANG_PREFIX = "lang"
 DONE = "done"
 
 # A digest of ten stories would be twenty buttons — a wall under every message.
@@ -43,6 +44,22 @@ def freq_keyboard(current: str) -> InlineKeyboardMarkup:
 
 def freq_label(mode: str) -> str:
     return _FREQ_LABELS.get(mode, mode)
+
+
+_LANG_LABELS = {"uz": "O'zbekcha", "en": "English"}
+
+
+def lang_keyboard(current: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for code, label in _LANG_LABELS.items():
+        mark = "✅" if code == current else "▫️"
+        builder.button(text=f"{mark} {label}", callback_data=f"{LANG_PREFIX}:{code}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def lang_label(code: str) -> str:
+    return _LANG_LABELS.get(code, code)
 
 
 def feedback_keyboard(entries: Sequence) -> InlineKeyboardMarkup | None:

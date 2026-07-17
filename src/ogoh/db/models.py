@@ -97,6 +97,11 @@ class ItemEnrichment(Base):
     importance: Mapped[int] = mapped_column(SmallInteger, index=True)
     summary: Mapped[str] = mapped_column(Text)
 
+    # Written in the same call as the English one, so it costs no extra quota.
+    # Nullable because rows enriched before this existed have none, and the
+    # renderer falls back rather than showing a subscriber an empty digest.
+    summary_uz: Mapped[str | None] = mapped_column(Text)
+
     model_used: Mapped[str] = mapped_column(String(64))
     enriched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

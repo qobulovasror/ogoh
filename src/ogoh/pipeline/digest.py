@@ -88,7 +88,18 @@ def _recency(item: Item) -> float:
     return as_utc(item.published_at or item.fetched_at).timestamp()
 
 
-def render_telegram(entries: Sequence[DigestEntry]) -> str:
+def summary_for(enrichment: ItemEnrichment, lang: str) -> str:
+    """The Uzbek summary when there is one, the English otherwise.
+
+    Rows enriched before summary_uz existed have none, and a subscriber reading
+    an English line is better served than one reading a blank.
+    """
+    if lang == "uz" and enrichment.summary_uz:
+        return enrichment.summary_uz
+    return enrichment.summary
+
+
+def render_telegram(entries: Sequence[DigestEntry], lang: str = "uz") -> str:
     if not entries:
         return "Bu safar chegaradan o'tgan yangilik yo'q."
 
@@ -105,7 +116,7 @@ def render_telegram(entries: Sequence[DigestEntry]) -> str:
             # whole; the number is the only thing tying a button to a story.
             f"<b>{position}.</b> <b>{entry.enrichment.importance}/10</b> — "
             f'<a href="{escape(entry.item.url)}">{escape(entry.item.title)}</a>\n'
-            f"{escape(entry.enrichment.summary)}\n"
+            f"{escape(summary_for(entry.enrichment, lang))}\n"
             f"<i>{escape(meta)}</i>"
         )
     return "\n\n".join(blocks)
