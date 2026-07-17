@@ -17,6 +17,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -62,6 +63,21 @@ class Item(Base):
     # The id of this story's canonical item — its earliest publisher. An item
     # that nobody else ran points at itself. NULL means dedupe hasn't seen it yet.
     cluster_id: Mapped[int | None] = mapped_column(index=True)
+
+    # The source asserts raw_text is already the whole item, so extraction must
+    # leave it alone. The changelog parser is the one that knows: it cut the
+    # section out itself, and fetching its URL would return the entire release
+    # notes page and overwrite one correct entry with all of them.
+    #
+    # server_default, not just default: SQLAlchemy's `default` is applied by the
+    # ORM on insert and emits no DDL, so adding this NOT NULL column to a table
+    # that already holds rows leaves SQLite with nothing to put in them —
+    # "Cannot add a NOT NULL column with default value NULL".
+    text_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+    # When extraction last tried, whether or not it worked. Without it a paywall
+    # or a 403 gets refetched every twenty minutes for as long as the bot lives.
+    text_extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     source: Mapped[Source] = relationship(back_populates="items")
     enrichment: Mapped["ItemEnrichment | None"] = relationship(

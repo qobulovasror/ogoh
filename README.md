@@ -113,12 +113,17 @@ bajarsin va `registry.py` ga qo'shilsin. Boshqa joyga tegmaydi.
 
 ```
 sources/     manba adapterlari (rss, changelog)
-pipeline/    ingest -> normalize -> dedupe -> enrich -> match -> digest
+pipeline/    ingest -> dedupe -> extract -> enrich -> match -> digest
 llm/         provider abstraksiyasi + prompt
 bot/         aiogram handlerlar, klaviaturalar
 worker.py    davriy vazifa: pipeline + yetkazish
 db/          SQLAlchemy modellar
+migrations/  alembic
 ```
+
+`extract` — feed lead i kalta bo'lgan itemlar uchun to'liq maqola matnini yuklaydi.
+Ustuvorligi yuqori: feed lead i bilan LLM OpenAI ning flagship model e'loniga 2/10
+qo'ygan edi, to'liq matn bilan 10/10. Batafsil: [PLAN.md](PLAN.md).
 
 ## Xarajat
 
@@ -134,7 +139,8 @@ tier limiti 1500/kun. Pul xarajati: faqat VPS.
 - **Anthropic dan faqat release notes.** `anthropic.com/news` da RSS ham, sitemap ham
   yo'q, HTML klasslari esa har build da o'zgaradigan hash. Release notes model va
   limit o'zgarishlarini qamrab oladi — asosiy ehtiyoj shu.
-- **Matn faqat RSS lead idan.** To'liq maqola (`trafilatura`) P2 da.
+- **~10% item hali kalta matnli** — ba'zi saytlar botlarni rad etadi (techdirt 403),
+  ular feed lead ida qoladi va shunga qarab baholanadi.
 - **SQLite + `create_all`.** Migratsiya yo'q — sxema o'zgarsa DB ni o'chirib qayta
   yaratish kerak. Alembic + Postgres deploydan oldin.
 - **`max_age_days=14`** — undan eski yangilik olinmaydi.

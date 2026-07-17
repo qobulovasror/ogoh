@@ -21,6 +21,13 @@ class RawItem:
     # ingest keys off it instead of the URL.
     uid: str | None = None
 
+    # Assert this only when `text` is genuinely the entire item and fetching
+    # `url` could not improve on it. Feeds cannot know — the RSS spec's own
+    # signal is useless here, since Simon Willison puts full posts in <summary>
+    # while Ars Technica truncates inside <content> — so only a source that
+    # assembled the text itself should claim it.
+    text_is_complete: bool = False
+
 
 @runtime_checkable
 class SourceFetcher(Protocol):

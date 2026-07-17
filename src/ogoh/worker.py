@@ -16,6 +16,7 @@ from ogoh.llm.gemini import GeminiProvider
 from ogoh.pipeline.dedupe import assign_clusters
 from ogoh.pipeline.digest import render_telegram
 from ogoh.pipeline.enrich import enrich_pending
+from ogoh.pipeline.extract import extract_pending
 from ogoh.pipeline.ingest import ingest_all
 from ogoh.pipeline.match import is_due, pending_for_user
 
@@ -31,6 +32,7 @@ _SEND_GAP_SECONDS = 0.05
 class PipelineStats:
     new_items: int = 0
     stories: int = 0
+    extracted: int = 0
     enriched: int = 0
 
 
@@ -55,6 +57,16 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
         deduped = assign_clusters(session)
         stats.stories = deduped.clustered
         log.info("dedupe: %d stories, %d folded in", deduped.clustered, deduped.merged)
+
+        extracted = extract_pending(session)
+        stats.extracted = extracted.improved
+        if extracted.attempted:
+            log.info(
+                "extract: %d fetched, %d improved, %d unavailable",
+                extracted.attempted,
+                extracted.improved,
+                extracted.failed,
+            )
 
         if skip_llm:
             return stats

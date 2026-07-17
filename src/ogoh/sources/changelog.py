@@ -77,6 +77,10 @@ def _parse(markdown: str, page_url: str) -> Iterator[RawItem]:
             title=f"Claude Platform release notes — {label}",
             published_at=published,
             text=text,
+            # This section is the whole entry. Its URL is the full release notes
+            # page, so letting extraction near it would replace one day's changes
+            # with every day's.
+            text_is_complete=True,
         )
 
 

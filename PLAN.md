@@ -353,12 +353,57 @@ O'lchov boshqa raqam berdi: 8 ta manba 14 kun uchun jami 131 item beradi, ya'ni
 Ya'ni hozir kvotaning ~0.1% i ishlatiladi. 60% ni tejash — nolning 60% i.
 Prefilter yechadigan muammo mavjud emas. Manba soni 10 barobar oshsa qaytamiz.
 
-### P2 — Sifat (~1 hafta)
-- Embedding dedupe + cluster
-- Mini App: teg tanlash UI, digest tarixi
-- 👍/👎 feedback tugmalari
-- `trafilatura` bilan to'liq matn extract (RSS ko'pincha faqat lead beradi)
-- Manba ishonch darajasi (trust scoring)
+### P2 — Sifat
+- ✅ `trafilatura` bilan to'liq matn — quyida, eng katta topilma shu yerda
+- ✅ Manba ishonch darajasi ishlatildi (canonical tanlash, render paytida)
+- ⏳ Embedding dedupe + cluster
+- ⏳ Mini App: teg tanlash UI, digest tarixi
+- ⏳ 👍/👎 feedback tugmalari
+
+### To'liq matn — dastur asosiy vazifasida jimgina yiqilayotgan ekan
+
+O'lchov: 169 ta itemning 86 tasi 400 belgidan kam matn bilan kelgan. Hugging Face
+feed ida esa matn maydoni **umuman yo'q** — faqat sarlavha va link.
+
+`trafilatura` qo'shilgach o'rtacha matn:
+
+| Manba | oldin | keyin |
+|---|---|---|
+| Hugging Face | **0** | 11766 |
+| Hacker News | 186 | 7012 |
+| OpenAI News | 144 | 5530 |
+| TechCrunch | 162 | 2929 |
+| Ars Technica | 1008 | 1606 |
+| Claude release notes | 429 | **429** (himoyalangan) |
+
+Kalta itemlar: 86/169 → **19/171**.
+
+**Asosiy topilma.** Eski baholarni saqlab, to'liq matn bilan qayta baholadim.
+144 tadan 54 tasining bahosi o'zgardi. Ular orasida:
+
+```
+GPT-5.6: Frontier intelligence that scales with your ambition   (openai.com/index/gpt-5-6)
+  kalta matn (144 belgi):   2/10  "Marketing overview of the GPT-5.6 model family."
+  to'liq matn (20000):     10/10  "OpenAI announced general availability of the
+                                   GPT-5.6 model family, introducing an 'ultra'
+                                   setting for parallel agent coordination."
+```
+
+`min_importance=5` da: **yuborilmasdi → yuboriladi.**
+
+OpenAI ning flagship model e'loni — bu dastur mavjud bo'lish sababining o'zi —
+jimgina tashlanardi. Hech qanday xato, hech qanday log. Faqat sukut.
+
+**Rubric aybdor emas edi.** Ilgari "taxmin bandi zaif" deb tashxis qo'ygandim
+(«Kimi 3 *expected to*» 6 ball olgani uchun). Noto'g'ri edi. Faqat marketing
+lead ini ko'rgan model uchun "2 = marketing" — *to'g'ri* javob. Model ishlagan,
+biz uni ochlikda qoldirgan ekanmiz. Promptni tuzatish muammoni yashirardi.
+
+Boshqa yo'nalishda ham to'g'irlandi: `v2.1.204` 6 → 2, `llm-meta-ai 0.1` 6 → 2.
+Kontekstsiz baho shunchaki shovqin bo'lar ekan — ikkala tomonga.
+
+19 tasi hali kalta: ba'zi saytlar botni rad etadi (techdirt 403). Ular feed
+lead ida qoladi — bu pol, yiqilish emas.
 
 ### P3 — Chuqurlik (~1 hafta)
 - Active research agent (Gemini + `google_search` grounding), kunlik top-3

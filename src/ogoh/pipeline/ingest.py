@@ -117,6 +117,7 @@ def _store(session: Session, source: Source, raw: RawItem) -> bool:
             author=raw.author[:256] if raw.author else None,
             published_at=raw.published_at,
             raw_text=raw.text[:_MAX_TEXT_CHARS] if raw.text else None,
+            text_complete=raw.text_is_complete,
             fetched_at=datetime.now(UTC),
         )
     )

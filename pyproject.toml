@@ -13,6 +13,7 @@ dependencies = [
     "aiogram>=3.29.1",
     "apscheduler>=3.11.3",
     "alembic>=1.18.5",
+    "trafilatura>=2.1.0",
 ]
 
 [build-system]
