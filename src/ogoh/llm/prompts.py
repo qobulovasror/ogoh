@@ -38,7 +38,15 @@ IMPORTANCE RUBRIC (0-10)
 
 Score every item ABSOLUTELY against this rubric. Do NOT grade on a curve against
 the other items in this batch. If all twenty items are routine coverage, all
-twenty score 2. A batch with no flagship launch in it contains no 10.\
+twenty score 2. A batch with no flagship launch in it contains no 10.
+
+The subject is AI: models, the APIs around them, the tooling, the research, the
+companies building them. An item that is not about AI scores at most 2, whatever
+else it is about. A cloud billing outage, a general security breach, an ordinary
+tech-industry story — these are 2 or below even when the numbers are enormous.
+The pricing-limits and infra-hardware tags mean AI pricing and AI infrastructure,
+not any pricing or any datacenter. When in doubt about whether something is AI
+news, it is not.\
 """
 
 

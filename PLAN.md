@@ -391,12 +391,33 @@ O'lchov boshqa raqam berdi: 8 ta manba 14 kun uchun jami 131 item beradi, ya'ni
 Ya'ni hozir kvotaning ~0.1% i ishlatiladi. 60% ni tejash — nolning 60% i.
 Prefilter yechadigan muammo mavjud emas. Manba soni 10 barobar oshsa qaytamiz.
 
-### P2 — Sifat
+### P2 — Sifat ✅ tugadi
 - ✅ `trafilatura` bilan to'liq matn — quyida, eng katta topilma shu yerda
 - ✅ Manba ishonch darajasi ishlatildi (canonical tanlash, render paytida)
-- ⏳ Embedding dedupe + cluster
-- ⏳ Mini App: teg tanlash UI, digest tarixi
-- ⏳ 👍/👎 feedback tugmalari
+- ✅ ~~Embedding~~ → LLM hukmi bilan semantik dedupe (embedding rad etildi — yuqoriga qara)
+- ✅ 👍/👎 feedback tugmalari (yig'iladi, ishlatish ma'lumot to'planganda)
+- ✅ 146 ta test — pytest, in-memory DB, faked LLM
+- ⏳ Mini App — `/topics` inline klaviaturasi shu ishni qiladi; Mini App HTTPS hosting
+  talab qiladi va uni takrorlaydi. VPS dan keyin, agar kerak bo'lsa.
+
+### P3 — Chuqurlik ✅ (asosiy qismi)
+- ✅ **Research agent** — o'z korpusda, grounding emas (429 sababli — quyida)
+- ✅ O'zbekcha summary (`summary_uz`, bitta chaqiruvda, `/lang`)
+- ✅ Qolgan manbalar: Google AI, arXiv, The Verge, r/LocalLLaMA
+- ⏳ Embedding shaxsiylashtirish — feedback ovozlari to'planganda
+- ⏳ Admin panel
+
+### Research — grounding rad etildi (o'lchangan)
+
+Reja: "Gemini + `google_search` grounding, tekin, kunlik top-3". Sinov: free tier
+kaliti **birinchi grounded chaqiruvdayoq 429** beradi, o'sha kalitda oddiy chaqiruv
+ishlaydi. Ya'ni tekin grounding kvotasi billing yoqilgan loyihalarga tegishli —
+hujjat aytgan "5000/oy" kartasiz tier ga emas. Empirik natija hujjatdan ustun.
+
+Yaxshisi ham bo'ldi: research o'z korpusimizni o'qiydi. Web qidiruv bizda allaqachon
+bor e'lonlarni qaytarardi; **tarix** esa faqat bizda — bugungi yangilikni o'tgan
+haftalardagilar bilan bog'lash. Jonli sinovda GPT-5.6 tahlili oldingi versiyaning
+fayl-o'chirish xatolariga bog'landi — bu bog'lanish umumiy qidiruvda yo'q.
 
 ### To'liq matn — dastur asosiy vazifasida jimgina yiqilayotgan ekan
 

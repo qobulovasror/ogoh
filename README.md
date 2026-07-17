@@ -7,8 +7,10 @@ Batafsil arxitektura va fazalar: [PLAN.md](PLAN.md)
 
 ## Holat
 
-Multi-user ishlaydi. 8 ta manba → dedupe → Gemini saralash → har bir foydalanuvchiga
-o'z mavzulari bo'yicha digest.
+Multi-user ishlaydi. 12 ta manba → dedupe → to'liq matn → Gemini saralash →
+kunlik chuqur tahlil → har bir foydalanuvchiga o'z mavzulari bo'yicha digest.
+
+146 ta test, `uv run pytest`.
 
 ## Ishga tushirish
 
@@ -86,61 +88,77 @@ o'zgargan ustunni tegmay qoldiradi — ya'ni sxema va model jimgina ayrilib keta
 | `/start` | ro'yxatdan o'tish |
 | `/topics` | mavzu tanlash (10 ta teg, bosib yoq/o'chir) |
 | `/freq` | darhol / kunlik / haftalik / o'chirilgan |
+| `/lang` | xulosalar tili (o'zbekcha / inglizcha) |
 | `/preview` | hozir nima borligini ko'rish (yuborilgan deb belgilanmaydi) |
 | `/pause` | vaqtincha to'xtatish |
 | `/stop` | butunlay o'chirish |
 
-Mavzu tanlanmasa — hammasi yuboriladi. `instant` rejim faqat 8/10 va undan yuqori
-bahoni yuboradi (model chiqishi, limit o'zgarishi).
+Har bir yangilik ostida 👍/👎 tugmalari. Mavzu tanlanmasa — hammasi yuboriladi.
+`instant` rejim faqat 8/10 va undan yuqori bahoni yuboradi (model chiqishi, limit
+o'zgarishi).
 
 ## Manbalar
 
-| Manba | Usul |
-|---|---|
-| Claude Platform release notes | markdown changelog |
-| Claude Code releases | GitHub Atom |
-| OpenAI News | RSS |
-| Simon Willison | RSS |
-| Hugging Face blog | RSS |
-| Ars Technica AI | RSS |
-| Hacker News (100+ ball) | RSS |
-| TechCrunch AI | RSS |
+| Manba | Usul | Daraja |
+|---|---|---|
+| Claude Platform release notes | markdown changelog | 1 |
+| Claude Code releases | GitHub Atom | 1 |
+| OpenAI News | RSS | 1 |
+| Google AI blog | RSS | 1 |
+| Hugging Face blog | RSS | 1 |
+| arXiv (cs.AI, cs.CL) | Atom API | 2 |
+| Simon Willison | RSS | 2 |
+| Ars Technica AI | RSS | 2 |
+| The Verge AI | RSS | 3 |
+| Hacker News (100+ ball) | RSS | 3 |
+| TechCrunch AI | RSS | 3 |
+| Reddit r/LocalLLaMA | RSS | 3 |
 
-Yangi manba qo'shish = `sources/` da bitta fayl, `SourceFetcher` protokolini
-bajarsin va `registry.py` ga qo'shilsin. Boshqa joyga tegmaydi.
+Daraja = bir yangilikni bir necha manba yozganda, kim vakolat bilan gapiryapti
+(1 = birlamchi, 2 = ekspert, 3 = matbuot). Yangi manba qo'shish = `sources/` da
+bitta fayl, `SourceFetcher` protokolini bajarsin va `registry.py` ga qo'shilsin.
 
 ## Nima qayerda
 
 ```
 sources/     manba adapterlari (rss, changelog)
-pipeline/    ingest -> dedupe -> extract -> enrich -> match -> digest
+pipeline/    ingest -> dedupe -> extract -> enrich -> research -> match -> digest
 llm/         provider abstraksiyasi + prompt
 bot/         aiogram handlerlar, klaviaturalar
 worker.py    davriy vazifa: pipeline + yetkazish
 db/          SQLAlchemy modellar
 migrations/  alembic
+tests/       146 test
 ```
 
-`extract` — feed lead i kalta bo'lgan itemlar uchun to'liq maqola matnini yuklaydi.
-Ustuvorligi yuqori: feed lead i bilan LLM OpenAI ning flagship model e'loniga 2/10
-qo'ygan edi, to'liq matn bilan 10/10. Batafsil: [PLAN.md](PLAN.md).
+Ikkita bosqich e'tiborga loyiq — ikkalasi ham "jimgina yo'qotish" muammosini yopadi:
+
+- **`extract`** — feed lead i kalta bo'lganda to'liq maqola matnini yuklaydi. Feed
+  lead i bilan LLM OpenAI ning flagship model e'loniga 2/10 qo'ygan edi, to'liq matn
+  bilan 10/10 — `min_importance=5` da yuborilmasdan qolardi.
+- **`research`** — kuniga bir marta kunning eng muhim yangiligiga ~120 so'zlik chuqur
+  tahlil yozadi: nima o'zgardi, kimga ta'sir qiladi, nima noaniq. Web qidiruv emas,
+  o'z korpusimiz asosida — chunki qiymat *tarixda*: bugungi e'lonni o'tgan haftalardagi
+  yangiliklar bilan bog'lashda. Batafsil: [PLAN.md](PLAN.md).
 
 ## Xarajat
 
-Bir ishga tushirishda ~130 yangilik yig'iladi, 20 tadan batch qilinib ~7 ta LLM
-chaqiruv ketadi. Har 20 daqiqada ishlaganda ham kuniga ~50 chaqiruv — Gemini free
-tier limiti 1500/kun. Pul xarajati: faqat VPS.
+Har bir ishga tushirishda LLM chaqiruvlari: enrich (20 tadan batch), dedupe hukmi
+(kuniga ~1), research (kuniga ~1). Har 20 daqiqada ishlaganda kuniga ~50 chaqiruv —
+Gemini free tier limiti 1500/kun, ya'ni ~3%. Embedding va grounding ishlatilmaydi.
+Pul xarajati: faqat VPS (~€4/oy).
 
 ## Ma'lum cheklovlar
 
-- **Dedupe faqat leksik.** Sarlavhalari deyarli bir xil dubllarni tutadi (chegara 0.85).
-  Ma'no bir xil, so'z boshqa bo'lsa — o'tkazib yuboradi. Sabab va o'lchov:
-  `pipeline/dedupe.py` docstring. Embedding P2 da.
 - **Anthropic dan faqat release notes.** `anthropic.com/news` da RSS ham, sitemap ham
   yo'q, HTML klasslari esa har build da o'zgaradigan hash. Release notes model va
   limit o'zgarishlarini qamrab oladi — asosiy ehtiyoj shu.
 - **~10% item hali kalta matnli** — ba'zi saytlar botlarni rad etadi (techdirt 403),
   ular feed lead ida qoladi va shunga qarab baholanadi.
-- **SQLite + `create_all`.** Migratsiya yo'q — sxema o'zgarsa DB ni o'chirib qayta
-  yaratish kerak. Alembic + Postgres deploydan oldin.
+- **Grounding yo'q.** Research o'z korpusimizda ishlaydi. Gemini ning `google_search`
+  grounding i free tier da 429 beradi (billing yoqilgan loyihalarga tegishli).
+- **Feedback yig'iladi, lekin hali ishlatilmaydi.** 👍/👎 saqlanadi; sozlash uchun
+  yetarli ovoz to'planganda mos algoritm qo'shiladi.
+- **SQLite.** Bitta jarayon, ~46 MB/yil — bu miqyosda yetarli. Postgres ikkinchi
+  yozuvchi paydo bo'lganda. Backup: `docker compose cp` bilan bitta fayl.
 - **`max_age_days=14`** — undan eski yangilik olinmaydi.
