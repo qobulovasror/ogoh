@@ -1,11 +1,18 @@
-from aiogram.types import InlineKeyboardMarkup
+from collections.abc import Sequence
+
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from ogoh.taxonomy import TAGS
 
 TOPIC_PREFIX = "topic"
 FREQ_PREFIX = "freq"
+VOTE_PREFIX = "vote"
 DONE = "done"
+
+# A digest of ten stories would be twenty buttons — a wall under every message.
+# The top few carry most of the signal anyway.
+MAX_FEEDBACK_ROWS = 5
 
 _FREQ_LABELS = {
     "instant": "Darhol (faqat muhimi)",
@@ -36,3 +43,22 @@ def freq_keyboard(current: str) -> InlineKeyboardMarkup:
 
 def freq_label(mode: str) -> str:
     return _FREQ_LABELS.get(mode, mode)
+
+
+def feedback_keyboard(entries: Sequence) -> InlineKeyboardMarkup | None:
+    """One row per story, numbered to match the digest text.
+
+    Telegram attaches a keyboard to a message, not to a paragraph inside it, so
+    the numbering is what ties a button to the story it is about.
+    """
+    if not entries:
+        return None
+
+    builder = InlineKeyboardBuilder()
+    for position, entry in enumerate(entries[:MAX_FEEDBACK_ROWS], start=1):
+        cluster = entry.item.cluster_id or entry.item.id
+        builder.row(
+            InlineKeyboardButton(text=f"{position} 👍", callback_data=f"{VOTE_PREFIX}:{cluster}:1"),
+            InlineKeyboardButton(text=f"{position} 👎", callback_data=f"{VOTE_PREFIX}:{cluster}:-1"),
+        )
+    return builder.as_markup()

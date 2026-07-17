@@ -16,12 +16,21 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ogoh.bot.keyboards import DONE, FREQ_PREFIX, TOPIC_PREFIX, freq_keyboard, freq_label, topics_keyboard
-from ogoh.db.models import User, UserTopic
+from ogoh.bot.keyboards import (
+    DONE,
+    FREQ_PREFIX,
+    TOPIC_PREFIX,
+    VOTE_PREFIX,
+    feedback_keyboard,
+    freq_keyboard,
+    freq_label,
+    topics_keyboard,
+)
+from ogoh.db.models import Feedback, User, UserTopic
 from ogoh.db.session import session_scope
-from ogoh.taxonomy import TAG_KEYS
-from ogoh.pipeline.match import pending_for_user
 from ogoh.pipeline.digest import render_telegram
+from ogoh.pipeline.match import pending_for_user
+from ogoh.taxonomy import TAG_KEYS
 
 log = logging.getLogger(__name__)
 
@@ -144,7 +153,48 @@ async def handle_preview(message: Message) -> None:
         user = _get_or_create(session, message.from_user.id, message.from_user.username)
         entries = pending_for_user(session, user, limit=5)
         text = render_telegram(entries)
-    await message.answer(text)
+        keyboard = feedback_keyboard(entries)
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith(f"{VOTE_PREFIX}:"))
+async def handle_vote(callback: CallbackQuery) -> None:
+    if callback.from_user is None or not isinstance(callback.data, str):
+        return
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+
+    try:
+        cluster_id, vote = int(parts[1]), int(parts[2])
+    except ValueError:
+        await callback.answer()
+        return
+
+    if vote not in (1, -1):
+        await callback.answer()
+        return
+
+    with session_scope() as session:
+        user = _get_or_create(session, callback.from_user.id, callback.from_user.username)
+        existing = session.get(Feedback, (user.id, cluster_id))
+        if existing is None:
+            session.add(
+                Feedback(
+                    user_id=user.id,
+                    cluster_id=cluster_id,
+                    vote=vote,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        else:
+            # Changing your mind overwrites rather than stacking.
+            existing.vote = vote
+            existing.created_at = datetime.now(UTC)
+
+    await callback.answer("Rahmat 👍" if vote == 1 else "Qayd etildi 👎")
 
 
 @router.message(Command("pause"))

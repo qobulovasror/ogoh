@@ -93,7 +93,7 @@ def render_telegram(entries: Sequence[DigestEntry]) -> str:
         return "Bu safar chegaradan o'tgan yangilik yo'q."
 
     blocks = ["<b>AI yangiliklari</b>\n"]
-    for entry in entries:
+    for position, entry in enumerate(entries, start=1):
         tags = " · ".join(LABELS_UZ.get(tag, tag) for tag in entry.enrichment.tags)
         meta = entry.item.source.name
         if tags:
@@ -101,7 +101,9 @@ def render_telegram(entries: Sequence[DigestEntry]) -> str:
         if entry.also_covered_by:
             meta += f" · +{entry.also_covered_by} manba"
         blocks.append(
-            f"<b>{entry.enrichment.importance}/10</b> — "
+            # Numbered because the feedback buttons hang off the message as a
+            # whole; the number is the only thing tying a button to a story.
+            f"<b>{position}.</b> <b>{entry.enrichment.importance}/10</b> — "
             f'<a href="{escape(entry.item.url)}">{escape(entry.item.title)}</a>\n'
             f"{escape(entry.enrichment.summary)}\n"
             f"<i>{escape(meta)}</i>"

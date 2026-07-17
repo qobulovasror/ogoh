@@ -157,3 +157,23 @@ class Delivery(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
     cluster_id: Mapped[int] = mapped_column(primary_key=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Feedback(Base):
+    """What a reader thought of a story.
+
+    Collected now, acted on later. With a handful of subscribers the votes are far
+    too sparse to tune anything against, and inventing a scoring rule for data
+    that does not exist yet would be guessing. But votes cannot be collected
+    retroactively, so the recording starts today and the rule waits for something
+    to calibrate against.
+
+    Keyed per story, not per item, so a vote survives a rerun being folded in.
+    """
+
+    __tablename__ = "feedback"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    cluster_id: Mapped[int] = mapped_column(primary_key=True)
+    vote: Mapped[int] = mapped_column(SmallInteger)  # +1 or -1
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

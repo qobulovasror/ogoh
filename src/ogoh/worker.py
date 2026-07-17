@@ -9,6 +9,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from sqlalchemy import select
 
+from ogoh.bot.keyboards import feedback_keyboard
 from ogoh.config import get_settings
 from ogoh.db.models import Delivery, User
 from ogoh.db.session import session_scope
@@ -141,6 +142,7 @@ async def _send(bot: Bot, session, user: User, entries: list) -> bool:
         await bot.send_message(
             user.telegram_id,
             render_telegram(entries),
+            reply_markup=feedback_keyboard(entries),
             link_preview_options={"is_disabled": True},
         )
         return True

@@ -6,38 +6,11 @@ edit_text/edit_reply_markup calls are skipped — which is fine here: the risk i
 this file is a subscription silently not being saved, not a keyboard drawn wrong.
 """
 
-from dataclasses import dataclass, field
-
 from sqlalchemy import func, select
+from stubs import StubCallback, StubMessage, StubUser
 
 from ogoh.bot import handlers
 from ogoh.db.models import Delivery, User, UserTopic
-
-
-@dataclass
-class StubUser:
-    id: int = 42
-    username: str | None = "tester"
-
-
-@dataclass
-class StubMessage:
-    from_user: StubUser = field(default_factory=StubUser)
-    replies: list[str] = field(default_factory=list)
-
-    async def answer(self, text, **kwargs):
-        self.replies.append(text)
-
-
-@dataclass
-class StubCallback:
-    data: str
-    from_user: StubUser = field(default_factory=StubUser)
-    message: object = None
-    answered: list = field(default_factory=list)
-
-    async def answer(self, text=None, **kwargs):
-        self.answered.append(text)
 
 
 async def test_start_registers_the_person(session):
