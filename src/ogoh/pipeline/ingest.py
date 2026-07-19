@@ -80,13 +80,29 @@ def _upsert_source(session: Session, fetcher: SourceFetcher) -> Source:
         )
         session.add(source)
         session.flush()
+        return source
+
+    # The registry is the source of truth, so re-tiering a source or moving its
+    # feed has to reach the row. Writing these only on insert means the code says
+    # one thing and every database that already ran says another.
+    if source.trust_tier != fetcher.trust_tier:
+        log.info(
+            "source %r re-tiered %d -> %d", fetcher.name, source.trust_tier, fetcher.trust_tier
+        )
+        source.trust_tier = fetcher.trust_tier
+    source.url = fetcher.url
+    source.kind = fetcher.kind
     return source
 
 
 def _store(session: Session, source: Source, raw: RawItem) -> bool:
-    """Insert the item. Returns False when we have already seen the URL."""
+    """Insert the item. Returns False when we have already seen it."""
     canonical = canonicalize_url(raw.url)
-    digest = url_hash(canonical)
+
+    # A source that declares a uid is telling us its URLs do not distinguish its
+    # items; namespace it per source so two sources can't collide on a bare uid.
+    identity = f"{source.id}:{raw.uid}" if raw.uid else canonical
+    digest = url_hash(identity)
 
     if session.scalar(select(Item.id).where(Item.url_hash == digest)) is not None:
         return False
@@ -101,6 +117,7 @@ def _store(session: Session, source: Source, raw: RawItem) -> bool:
             author=raw.author[:256] if raw.author else None,
             published_at=raw.published_at,
             raw_text=raw.text[:_MAX_TEXT_CHARS] if raw.text else None,
+            text_complete=raw.text_is_complete,
             fetched_at=datetime.now(UTC),
         )
     )

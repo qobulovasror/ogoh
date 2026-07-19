@@ -1,26 +1,52 @@
-"""P0 digest: top items by importance, one shared list.
+"""Digest assembly: one entry per story, most authoritative source first.
 
-Per-user matching lands in P1 — that is where user_topics and the deliveries
-ledger come in. For now this proves the pipeline produces something worth reading.
+Two rankings, deliberately separate. Within a story the most trusted source
+speaks — Anthropic's own release note outranks a rewrite of it, whoever happened
+to publish first. Across stories, importance decides the order.
+
+Note what this does *not* do: pick a new canonical and write it back to
+`Item.cluster_id`. That column is the key of the deliveries ledger. Moving it
+would make every already-sent story look unsent, and everyone would get their
+week over again. Cluster identity is permanent; presentation is decided here,
+per render.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ogoh.db.models import Item, ItemEnrichment
+from ogoh.db.models import ClusterResearch, Item, ItemEnrichment, Source
 from ogoh.taxonomy import LABELS_UZ
 
 
-def top_items(
+@dataclass(slots=True)
+class DigestEntry:
+    item: Item
+    enrichment: ItemEnrichment
+    also_covered_by: int = 0
+    research: ClusterResearch | None = None
+
+
+def as_utc(value: datetime) -> datetime:
+    """SQLite has no timestamptz.
+
+    DateTime(timezone=True) round-trips through it as a naive value, and mixing
+    that with an aware one raises TypeError. Postgres returns these aware, so
+    this has to cope with both.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def top_entries(
     session: Session,
     min_importance: int,
     limit: int,
     within_hours: int = 48,
-) -> Sequence[tuple[Item, ItemEnrichment]]:
+) -> list[DigestEntry]:
     cutoff = datetime.now(UTC) - timedelta(hours=within_hours)
 
     # Window on when the news happened, not on when we happened to fetch it.
@@ -29,41 +55,96 @@ def top_items(
     published = func.coalesce(Item.published_at, Item.fetched_at)
 
     stmt = (
-        select(Item, ItemEnrichment)
+        select(Item, ItemEnrichment, Source.trust_tier)
         .join(ItemEnrichment, ItemEnrichment.item_id == Item.id)
+        .join(Source, Source.id == Item.source_id)
         .where(ItemEnrichment.importance >= min_importance)
         .where(published >= cutoff)
         .order_by(ItemEnrichment.importance.desc(), published.desc())
-        .limit(limit)
+        # Over-fetch: rows collapse by cluster below, and a story carried by four
+        # outlets would otherwise eat four of the caller's slots.
+        .limit(limit * 5)
     )
-    return session.execute(stmt).all()
+
+    clusters: dict[int, list[tuple[Item, ItemEnrichment, int]]] = {}
+    for item, enrichment, trust_tier in session.execute(stmt).all():
+        clusters.setdefault(item.cluster_id or item.id, []).append((item, enrichment, trust_tier))
+
+    entries = []
+    for members in clusters.values():
+        # Lower tier is more authoritative. Between two equally trusted sources
+        # the one who broke the story wins — without an explicit tiebreak this
+        # falls to fetch order, which means whoever published last.
+        members.sort(key=lambda member: (member[2], _recency(member[0])))
+        item, enrichment, _ = members[0]
+        entries.append(
+            DigestEntry(item=item, enrichment=enrichment, also_covered_by=len(members) - 1)
+        )
+
+    entries.sort(key=lambda entry: (-entry.enrichment.importance, -_recency(entry.item)))
+    entries = entries[:limit]
+
+    for entry in entries:
+        entry.research = session.get(ClusterResearch, entry.item.cluster_id or entry.item.id)
+    return entries
 
 
-def render_telegram(rows: Sequence[tuple[Item, ItemEnrichment]]) -> str:
-    if not rows:
+def _recency(item: Item) -> float:
+    return as_utc(item.published_at or item.fetched_at).timestamp()
+
+
+def summary_for(enrichment: ItemEnrichment, lang: str) -> str:
+    """The Uzbek summary when there is one, the English otherwise.
+
+    Rows enriched before summary_uz existed have none, and a subscriber reading
+    an English line is better served than one reading a blank.
+    """
+    if lang == "uz" and enrichment.summary_uz:
+        return enrichment.summary_uz
+    return enrichment.summary
+
+
+def render_telegram(entries: Sequence[DigestEntry], lang: str = "uz") -> str:
+    if not entries:
         return "Bu safar chegaradan o'tgan yangilik yo'q."
 
     blocks = ["<b>AI yangiliklari</b>\n"]
-    for item, enrichment in rows:
-        tags = " · ".join(LABELS_UZ.get(tag, tag) for tag in enrichment.tags)
+    for position, entry in enumerate(entries, start=1):
+        tags = " · ".join(LABELS_UZ.get(tag, tag) for tag in entry.enrichment.tags)
+        meta = entry.item.source.name
+        if tags:
+            meta += f" · {tags}"
+        if entry.also_covered_by:
+            meta += f" · +{entry.also_covered_by} manba"
         blocks.append(
-            f"<b>{enrichment.importance}/10</b> — "
-            f'<a href="{escape(item.url)}">{escape(item.title)}</a>\n'
-            f"{escape(enrichment.summary)}\n"
-            f"<i>{escape(item.source.name)}{' · ' + escape(tags) if tags else ''}</i>"
+            # Numbered because the feedback buttons hang off the message as a
+            # whole; the number is the only thing tying a button to a story.
+            f"<b>{position}.</b> <b>{entry.enrichment.importance}/10</b> — "
+            f'<a href="{escape(entry.item.url)}">{escape(entry.item.title)}</a>\n'
+            f"{escape(summary_for(entry.enrichment, lang))}\n"
+            f"{_research_block(entry, lang)}"
+            f"<i>{escape(meta)}</i>"
         )
     return "\n\n".join(blocks)
 
 
-def render_console(rows: Sequence[tuple[Item, ItemEnrichment]]) -> str:
-    if not rows:
+def _research_block(entry: DigestEntry, lang: str) -> str:
+    if entry.research is None:
+        return ""
+    body = entry.research.body_uz if lang == "uz" and entry.research.body_uz else entry.research.body
+    return f"\n<blockquote expandable>{escape(body)}</blockquote>\n"
+
+
+def render_console(entries: Sequence[DigestEntry]) -> str:
+    if not entries:
         return "(chegaradan o'tgan yangilik yo'q)"
 
     lines = []
-    for item, enrichment in rows:
-        lines.append(f"[{enrichment.importance:>2}/10] {item.title}")
-        lines.append(f"         {enrichment.summary}")
-        lines.append(f"         {item.source.name} · {', '.join(enrichment.tags)}")
-        lines.append(f"         {item.url}")
+    for entry in entries:
+        extra = f"  (+{entry.also_covered_by} manba)" if entry.also_covered_by else ""
+        lines.append(f"[{entry.enrichment.importance:>2}/10] {entry.item.title}{extra}")
+        lines.append(f"         {entry.enrichment.summary}")
+        lines.append(f"         {entry.item.source.name} · {', '.join(entry.enrichment.tags)}")
+        lines.append(f"         {entry.item.url}")
         lines.append("")
     return "\n".join(lines)

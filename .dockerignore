@@ -1,0 +1,15 @@
+# Secrets are mounted at runtime via env_file, never baked into a layer.
+.env
+
+.venv/
+__pycache__/
+*.py[cod]
+*.db
+*.db-journal
+
+.git/
+.ruff_cache/
+.pytest_cache/
+.DS_Store
+
+*.md

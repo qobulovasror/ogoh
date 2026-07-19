@@ -1,17 +1,15 @@
-"""P0 schema: sources, items, enrichment.
+"""Schema: sources, items, enrichment, users, subscriptions, deliveries.
 
 Tags and entities are JSON rather than a Postgres ARRAY so the same models run on
 SQLite now and on Postgres later without a rewrite. JSON maps to JSONB on
 Postgres, which indexes fine, so this is not a decision that has to be undone.
-
-users / user_topics / deliveries land in P1. `deliveries` in particular carries
-PRIMARY KEY(user_id, cluster_id) and is what makes double-sending impossible.
 """
 
 from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -19,6 +17,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -61,6 +60,25 @@ class Item(Base):
     raw_text: Mapped[str | None] = mapped_column(Text)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+    # The id of this story's canonical item — its earliest publisher. An item
+    # that nobody else ran points at itself. NULL means dedupe hasn't seen it yet.
+    cluster_id: Mapped[int | None] = mapped_column(index=True)
+
+    # The source asserts raw_text is already the whole item, so extraction must
+    # leave it alone. The changelog parser is the one that knows: it cut the
+    # section out itself, and fetching its URL would return the entire release
+    # notes page and overwrite one correct entry with all of them.
+    #
+    # server_default, not just default: SQLAlchemy's `default` is applied by the
+    # ORM on insert and emits no DDL, so adding this NOT NULL column to a table
+    # that already holds rows leaves SQLite with nothing to put in them —
+    # "Cannot add a NOT NULL column with default value NULL".
+    text_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+    # When extraction last tried, whether or not it worked. Without it a paywall
+    # or a 403 gets refetched every twenty minutes for as long as the bot lives.
+    text_extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     source: Mapped[Source] = relationship(back_populates="items")
     enrichment: Mapped["ItemEnrichment | None"] = relationship(
         back_populates="item", uselist=False
@@ -79,7 +97,104 @@ class ItemEnrichment(Base):
     importance: Mapped[int] = mapped_column(SmallInteger, index=True)
     summary: Mapped[str] = mapped_column(Text)
 
+    # Written in the same call as the English one, so it costs no extra quota.
+    # Nullable because rows enriched before this existed have none, and the
+    # renderer falls back rather than showing a subscriber an empty digest.
+    summary_uz: Mapped[str | None] = mapped_column(Text)
+
     model_used: Mapped[str] = mapped_column(String(64))
     enriched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     item: Mapped[Item] = relationship(back_populates="enrichment")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # Telegram ids exceed 2^31, so this must be BigInteger — the default Integer
+    # holds today's ids and silently overflows on newer accounts.
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(64))
+
+    lang: Mapped[str] = mapped_column(String(8), default="uz")
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Tashkent")
+
+    digest_mode: Mapped[str] = mapped_column(String(16), default="daily")  # see DIGEST_MODES
+    digest_hour: Mapped[int] = mapped_column(SmallInteger, default=9)
+    min_importance: Mapped[int] = mapped_column(SmallInteger, default=5)
+
+    # Without this a 20-minute scheduler would re-send a daily digest every 20
+    # minutes for the whole hour it is due — the deliveries ledger would keep the
+    # stories from repeating, but the reader still gets three empty-ish messages.
+    last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    topics: Mapped[list["UserTopic"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class UserTopic(Base):
+    __tablename__ = "user_topics"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    tag: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+    user: Mapped[User] = relationship(back_populates="topics")
+
+
+class Delivery(Base):
+    """The idempotency ledger.
+
+    PRIMARY KEY(user_id, cluster_id) is what actually makes it impossible to send
+    one person the same story twice. Every guard above this is a convenience; this
+    is the one that holds when the process dies mid-run or two instances race.
+    Keyed on cluster, not item, so a story republished by a second outlet does not
+    come round again.
+    """
+
+    __tablename__ = "deliveries"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    cluster_id: Mapped[int] = mapped_column(primary_key=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ClusterResearch(Base):
+    """The deep dive on one story.
+
+    Keyed by cluster, written once. Nothing here re-reads a story we have already
+    written up: the run costs a call and the news has not changed since morning.
+    """
+
+    __tablename__ = "cluster_research"
+
+    cluster_id: Mapped[int] = mapped_column(primary_key=True)
+    body: Mapped[str] = mapped_column(Text)
+    body_uz: Mapped[str | None] = mapped_column(Text)
+    model_used: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Feedback(Base):
+    """What a reader thought of a story.
+
+    Collected now, acted on later. With a handful of subscribers the votes are far
+    too sparse to tune anything against, and inventing a scoring rule for data
+    that does not exist yet would be guessing. But votes cannot be collected
+    retroactively, so the recording starts today and the rule waits for something
+    to calibrate against.
+
+    Keyed per story, not per item, so a vote survives a rerun being folded in.
+    """
+
+    __tablename__ = "feedback"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    cluster_id: Mapped[int] = mapped_column(primary_key=True)
+    vote: Mapped[int] = mapped_column(SmallInteger)  # +1 or -1
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

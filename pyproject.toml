@@ -10,6 +10,10 @@ dependencies = [
     "sqlalchemy>=2.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "aiogram>=3.29.1",
+    "apscheduler>=3.11.3",
+    "alembic>=1.18.5",
+    "trafilatura>=2.1.0",
 ]
 
 [build-system]
@@ -21,7 +25,19 @@ packages = ["src/ogoh"]
 
 [project.scripts]
 ogoh = "ogoh.cli:main"
+ogoh-bot = "ogoh.bot.main:run"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:ogoh.*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]

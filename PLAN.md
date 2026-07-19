@@ -73,10 +73,33 @@ Frontend:   Vite + React (bitta app, ikkita route: /app = Mini App, /admin = pan
 Deploy:     VPS (Hetzner CX22 ~€4/oy) + docker-compose
 ```
 
-**Nega Supabase emas, VPS:** free tier 500MB — `raw_text` uni tez to'ldiradi. VPS da
-Postgres o'zingda, tarmoq hop yo'q, free-tier siyosati o'zgarishidan qo'rqmaysan. €4 arzon.
-(Agar ops bilan shug'ullanishni umuman xohlamasang — Supabase ol, lekin 90 kunlik
-retention siyosatini boshidan yoz.)
+### Postgres rad etildi — SQLite qoldi (o'lchangan)
+
+Reja Postgres + pgvector deb yozgan edi. O'lchov boshqa narsa ko'rsatdi:
+
+| | Raqam |
+|---|---|
+| DB hajmi (131 item + 14 kun tarix) | **312 KB** |
+| Yillik o'sish (kuniga ~30 item) | ~25 MB |
+| Yozuvchi jarayonlar | **1 ta** |
+| Foydalanuvchi | 10-50 |
+
+Postgres beradigan narsalar va ularning hozirgi holati:
+- *Parallel yozuvchilar* — bitta jarayon bor. Kerak emas.
+- *pgvector* — P2 da 11k item × 768 float. Python da 500 ta yaqin item ustida
+  cosine — mikrosoniya. Kerak emas.
+- *Miqyos* — 25 MB/yil. Kulgili.
+
+Evaziga: konteyner, parol, volume, backup strategiyasi, kechasi buziladigan yana
+bitta komponent. Bu miqyosda SQLite yutadi. Backup — 312 KB faylni nusxalash.
+
+**Alembic esa boshqa masala** — u Postgres bilan bog'liq emas, SQLite da ham
+ishlaydi, va u haqiqatan kerak edi: foydalanuvchi ma'lumoti paydo bo'lgach
+`create_all` bilan davom etish sxema o'zgarishida uni yo'q qiladi. Reja ikkovini
+bitta bandga bog'lab, kerakmasini kerakliga tirkab qo'ygan ekan.
+
+**Qachon qaytamiz:** ikkinchi yozuvchi jarayon paydo bo'lsa, yoki vector search
+Python halqasidan oshib ketsa.
 
 ---
 
@@ -117,14 +140,86 @@ Natija: 300 → 120. LLM chaqiruvning 60% i tejaladi.
 Bir yangilikni 10 ta sayt yozadi. Dedupe ishlamasa user spam yeydi va chiqib ketadi.
 **MVP da ham kerak — keyinga qoldirma.**
 
-1. **URL canonicalize** — `utm_*` va fragment ni olib tashla, redirect ni yech,
-   trailing slash normalize → `sha256` → DB da `UNIQUE`. Aniq takrorlarni o'ldiradi.
-2. **Simhash** (64-bit, title + lead ustida) — Hamming distance ≤ 3 bo'lsa bir xil yangilik.
-   Arzon, LLM kerak emas. "OpenAI launches X" va "OpenAI Launches X — TechCrunch" ni tutadi.
-3. **Embedding cosine** — 48 soatlik oyna ichida `> 0.88` bo'lsa bitta cluster.
-   Boshqacha yozilgan, lekin ma'nosi bir xil yangiliklarni tutadi.
+1. **URL canonicalize** ✅ — `utm_*` va fragment ni olib tashla, trailing slash
+   normalize → `sha256` → DB da `UNIQUE`. Aniq takrorlarni o'ldiradi.
+   *Ogohlantirish:* fragment tashlash changelog kabi anchor bilan adreslanadigan
+   sahifalarni buzadi — har bir yozuv bitta hash ga tushadi. Shuning uchun `RawItem.uid`:
+   manba kerak bo'lsa o'z identifikatorini o'zi e'lon qiladi.
+2. ~~**Simhash**~~ → **Jaccard ≥ 0.85** ✅ — avtomatik qo'shish, sabab quyida.
+3. ~~**Embedding cosine > 0.88**~~ → **LLM hukmi** ✅ — *reja rad etildi, sabab quyida.*
 
-3-darajani faqat 1 va 2 dan o'tganlarga qo'lla — chaqiruv tejaladi.
+### Nega embedding emas, LLM (o'lchangan — reja rad etildi)
+
+Reja 3-daraja uchun `embedding cosine > 0.88` degan edi. O'lchadim:
+
+```
+                                                    jaccard   cosine
+ROST    "xai-org/grok-build, now open source"
+        "Grok Build is open source"                   0.67     0.942
+YOLGON  "sqlite-utils 4.1.1" / "sqlite-utils 4.0"     0.50     0.960
+```
+
+**Cosine da yolg'on juftlik rost juftlikdan yuqori.** Masofa: −0.018. To'liq matn
+qo'shsam yomonlashadi: −0.045. Ya'ni ishlaydigan chegara mavjud emas.
+
+Reja shu yerda nafaqat foydasiz, balki **zararli** edi: `> 0.88` ikkala relizni
+qo'shib yuborardi va ikkinchisi izsiz yo'qolardi.
+
+Sabab: embedding "bir xil **mavzu**" ni o'lchaydi. `4.1.1` va `4.0` haqiqatan bir
+xil mavzu — bir loyiha, bir turdagi e'lon. Embedding to'g'ri javob beryapti,
+faqat savol noto'g'ri berilgan.
+
+**LLM to'g'ri savolga javob beradi** — o'lchangan 8 juftlikda 8/8, ustiga sababini
+aytadi: "different software versions", "different products". Jonli ma'lumotda: 9 ta
+nomzoddan 1 tasini qo'shdi (`grok-build`, "Identical news about the same project"),
+8 tasini to'g'ri ajratdi.
+
+Shuning uchun o'xshashlik o'z o'rniga tushirildi — **nomzod taklif qilish**, hukm
+emas:
+
+```
+>= 0.85           deyarli aniq  -> darhol qo'shiladi, LLM chaqirilmaydi
+[0.45, 0.85)      noaniq        -> LLM hukm qiladi
+< 0.45            begona        -> tegilmaydi
+```
+
+Kuniga ~1 qo'shimcha chaqiruv. LLM yiqilsa yoki javob bermasa — juftlik ajratilgan
+holda qoladi: ko'rinadigan dubl, jimgina o'chirishdan yaxshiroq.
+
+### Nega simhash emas, Jaccard (o'lchangan)
+
+Simhash uzun hujjatlar va LSH banding kerak bo'ladigan katta korpus uchun foydali.
+Bu yerda sarlavhalar — bir necha token, va bir run ~130 yangi itemni bir necha yuz
+eski item bilan solishtiradi. Bu miqyosda to'g'ridan-to'g'ri to'plam kesishmasi
+qisqa satrlarda **aniqroq** va xarajati nol.
+
+99 ta jonli item ustida o'lchov:
+
+```
+1.00  "Introducing GPT-Live" / "Introducing GPT‑Live"        ROST (U+2011 defis)
+0.67  "xai-org/grok-build, now open source"
+      "Grok Build is open source"                             ROST
+0.50  "sqlite-utils 4.1.1" / "sqlite-utils 4.0"               YOLG'ON (har xil reliz)
+0.50  "How sales teams use ChatGPT Work"
+      "How data science teams use ChatGPT Work"               YOLG'ON (har xil maqola)
+```
+
+Rost va yolg'on orasida atigi **0.17** masofa. O'rtadagi chegara boshqa kun boshqa
+taqsimotda tanga tashlashga aylanadi. Shuning uchun chegara **0.85** — faqat deyarli
+aniq bo'lganini qo'shadi, qolganini o'tkazib yuboradi.
+
+Asimmetriya hal qildi: **yolg'on qo'shish yangilikni jimgina o'chiradi** (o'quvchi
+u chiqqanini ham bilmaydi), yolg'on ajratish esa shunchaki bir narsani ikki marta
+ko'rsatadi. `grok-build` kabi ma'noviy juftlar embedding talab qiladi — bir kunlik
+yangilikka moslangan chegara emas.
+
+*Tokenizer tuzog'i:* versiya raqamini butun saqlash kerak. `4.1.1` ni raqamlarga
+bo'lsang, stop-word filtridan keyin `4.0` bilan aynan bir xil bo'lib qoladi va
+uchta har xil reliz bitta bo'lib ketadi.
+
+*Oyna tuzog'i:* dedupe oynasi ingest saqlaydigan hamma narsani qoplashi shart.
+48 soatga qo'ysang, eski itemlar `cluster_id=NULL` bo'lib qoladi va **haftalik
+obunachi hech solishtirilmagan dubllarni oladi.**
 
 Cluster ichidan canonical tanla: `manba_ishonchi × yangilik`. Xabarda "+4 boshqa manba" ko'rsat.
 
@@ -143,17 +238,37 @@ Hammasi `curl` bilan tekshirilgan (2026-07-16):
 | TechCrunch AI | RSS | ✅ 20 item |
 | HuggingFace blog | RSS | ✅ 829 item — P1 da qo'shiladi |
 | The Verge AI | RSS | ✅ 10 item — P1 |
-| **Anthropic** | **scrape** | ❌ RSS yo'q (`/rss.xml`, `/news/rss.xml` — ikkalasi 404) |
+| **Claude Platform release notes** | **markdown** | ✅ `.md` qo'shsang xom markdown beradi — scrape kerak emas |
+| **Claude Code releases** | GitHub Atom | ✅ mavjud `RssSource` hazm qiladi |
+| ~~Anthropic news HTML~~ | scrape | ⏸ qoldirildi — sabab quyida |
 | ~~Google DeepMind~~ `deepmind.google/blog/rss.xml` | — | ❌ **o'lik**: 240 bayt, `<channel>` bor, item yo'q |
 | Reddit `r/LocalLLaMA`, `r/ClaudeAI` | RSS | P1 |
 | arXiv `cs.AI`, `cs.CL` | rasmiy API | P2 |
 | GitHub Releases | Atom feed | P2 |
 
-Ikkita tuzatish:
+Tuzatishlar:
 - **OpenAI da RSS bor** — ilgari "scrape kerak" degandim, noto'g'ri edi. Bitta scraper tejaldi,
   ustiga u *birlamchi* manba (trust_tier=1).
 - **DeepMind feed o'lik** — aynan rejadagi "jimgina 0 item qaytaradi" xavfining tirik misoli.
   Ro'yxatdan chiqarildi.
+- **Anthropic uchun HTML scrape shart emas edi.** Claude docs har qanday sahifani `.md`
+  qo'shsang xom markdown qilib beradi. `### July 10, 2026` sarlavhalari ostida toza
+  bulletlar — aynan model va limit o'zgarishlari. HTML dan tubdan barqarorroq.
+
+### Nega `anthropic.com/news` HTML scraper i qoldirildi
+
+Uchta to'siq:
+1. **Sitemap yo'q** — `sitemap.xml` 200 qaytaradi, lekin ichida `<html id="__next_error__">`.
+   Bu soxta 404: status kodga qarab yozilgan tekshiruv buni "ishlayapti" deb o'qiydi.
+2. **CSS klasslari hash langan** — `FeaturedGrid-module-scss-module__W1FydW__sideLink`.
+   `W1FydW` har build da o'zgaradi. Shu selektorga bog'langan scraper Anthropic har
+   deploy qilganda **jimgina** o'ladi.
+3. **Next.js App Router** — `__NEXT_DATA__` JSON yo'q, faqat `self.__next_f` RSC payload.
+   Parse qilish mumkin, lekin mo'rt.
+
+Release notes asosiy ehtiyojni (model, limit, API) qoplaydi. Qolgani — e'lonlar va
+kompaniya yangiliklari — TechCrunch/HN orqali baribir yetib keladi. Nisbat to'g'ri
+kelmadi: mo'rt scraper ni har hafta tuzatishdan ko'ra, mustahkam manbadan boshlash.
 
 Har bir manba `Source` protokolini bajarsin: `fetch() -> list[RawItem]`. Yangi manba qo'shish
 = bitta fayl, boshqa joyga tegmaydi.
@@ -251,22 +366,103 @@ bilan yubor — keyin o'sganda qayta yozmaysan.
 
 **Maqsad:** pipeline boshidan oxirigacha ishlaydi. Sifat hali muhim emas.
 
-### P1 — Multi-user MVP (~1 hafta)
-- Postgres + Alembic migration
-- aiogram bot: `/start`, `/topics`, `/freq`, `/pause`, `/stop`
-- `users`, `user_topics`, `deliveries` jadvallari
-- APScheduler: ingest 20 daqiqada, digest soatda bir (kimga vaqt kelganini tekshiradi)
-- Simhash dedupe
-- Importance threshold
+### P1 — Multi-user MVP ✅ tugadi
+- ✅ aiogram bot: `/start`, `/topics`, `/freq`, `/preview`, `/pause`, `/stop`
+- ✅ `users`, `user_topics`, `deliveries` jadvallari
+- ✅ APScheduler: har 20 daqiqada pipeline + yetkazish (`max_instances=1`, `coalesce`)
+- ✅ Leksik dedupe (Jaccard, simhash emas — yuqoriga qara)
+- ✅ Per-user importance threshold + mavzu filtri + timezone bo'yicha vaqt
+- ✅ Anthropic manbasi (release notes markdown) + Claude Code releases
+- ✅ **Alembic** — baseline migratsiya, `init_db` startda `upgrade head` qiladi.
+  Drift sinovdan o'tkazildi: sun'iy ustun qo'shilganda `alembic check` uni tutdi.
+- ✅ **Docker + compose** — sirlar obrazda yo'q, volume da ma'lumot saqlanadi
+  (ikki konteyner bilan tekshirilgan)
+- ❌ **Postgres — rad etildi, hozircha.** Sabab quyida.
 
-**Maqsad:** do'stlaring haqiqatan ishlatadi.
+**Holat:** uchdan-uchgacha tekshirilgan. @get_news_for_me_bot da haqiqiy foydalanuvchi
+ro'yxatdan o'tdi, `/topics` bilan 5 ta mavzu tanladi, klaviatura yetib bordi.
 
-### P2 — Sifat (~1 hafta)
-- Embedding dedupe + cluster
-- Mini App: teg tanlash UI, digest tarixi
-- 👍/👎 feedback tugmalari
-- `trafilatura` bilan to'liq matn extract (RSS ko'pincha faqat lead beradi)
-- Manba ishonch darajasi (trust scoring)
+### Prefilter — rejadan olib tashlandi
+
+Reja uni "300 → 120 item, LLM chaqiruvning 60% i tejaladi" deb asoslagan edi.
+O'lchov boshqa raqam berdi: 8 ta manba 14 kun uchun jami 131 item beradi, ya'ni
+**kuniga ~10-30 ta**. 20 tadan batch qilinsa — kuniga 1-2 chaqiruv, kvota 1500.
+
+Ya'ni hozir kvotaning ~0.1% i ishlatiladi. 60% ni tejash — nolning 60% i.
+Prefilter yechadigan muammo mavjud emas. Manba soni 10 barobar oshsa qaytamiz.
+
+### P2 — Sifat ✅ tugadi
+- ✅ `trafilatura` bilan to'liq matn — quyida, eng katta topilma shu yerda
+- ✅ Manba ishonch darajasi ishlatildi (canonical tanlash, render paytida)
+- ✅ ~~Embedding~~ → LLM hukmi bilan semantik dedupe (embedding rad etildi — yuqoriga qara)
+- ✅ 👍/👎 feedback tugmalari (yig'iladi, ishlatish ma'lumot to'planganda)
+- ✅ 146 ta test — pytest, in-memory DB, faked LLM
+- ⏳ Mini App — `/topics` inline klaviaturasi shu ishni qiladi; Mini App HTTPS hosting
+  talab qiladi va uni takrorlaydi. VPS dan keyin, agar kerak bo'lsa.
+
+### P3 — Chuqurlik ✅ (asosiy qismi)
+- ✅ **Research agent** — o'z korpusda, grounding emas (429 sababli — quyida)
+- ✅ O'zbekcha summary (`summary_uz`, bitta chaqiruvda, `/lang`)
+- ✅ Qolgan manbalar: Google AI, arXiv, The Verge, r/LocalLLaMA
+- ⏳ Embedding shaxsiylashtirish — feedback ovozlari to'planganda
+- ⏳ Admin panel
+
+### Research — grounding rad etildi (o'lchangan)
+
+Reja: "Gemini + `google_search` grounding, tekin, kunlik top-3". Sinov: free tier
+kaliti **birinchi grounded chaqiruvdayoq 429** beradi, o'sha kalitda oddiy chaqiruv
+ishlaydi. Ya'ni tekin grounding kvotasi billing yoqilgan loyihalarga tegishli —
+hujjat aytgan "5000/oy" kartasiz tier ga emas. Empirik natija hujjatdan ustun.
+
+Yaxshisi ham bo'ldi: research o'z korpusimizni o'qiydi. Web qidiruv bizda allaqachon
+bor e'lonlarni qaytarardi; **tarix** esa faqat bizda — bugungi yangilikni o'tgan
+haftalardagilar bilan bog'lash. Jonli sinovda GPT-5.6 tahlili oldingi versiyaning
+fayl-o'chirish xatolariga bog'landi — bu bog'lanish umumiy qidiruvda yo'q.
+
+### To'liq matn — dastur asosiy vazifasida jimgina yiqilayotgan ekan
+
+O'lchov: 169 ta itemning 86 tasi 400 belgidan kam matn bilan kelgan. Hugging Face
+feed ida esa matn maydoni **umuman yo'q** — faqat sarlavha va link.
+
+`trafilatura` qo'shilgach o'rtacha matn:
+
+| Manba | oldin | keyin |
+|---|---|---|
+| Hugging Face | **0** | 11766 |
+| Hacker News | 186 | 7012 |
+| OpenAI News | 144 | 5530 |
+| TechCrunch | 162 | 2929 |
+| Ars Technica | 1008 | 1606 |
+| Claude release notes | 429 | **429** (himoyalangan) |
+
+Kalta itemlar: 86/169 → **19/171**.
+
+**Asosiy topilma.** Eski baholarni saqlab, to'liq matn bilan qayta baholadim.
+144 tadan 54 tasining bahosi o'zgardi. Ular orasida:
+
+```
+GPT-5.6: Frontier intelligence that scales with your ambition   (openai.com/index/gpt-5-6)
+  kalta matn (144 belgi):   2/10  "Marketing overview of the GPT-5.6 model family."
+  to'liq matn (20000):     10/10  "OpenAI announced general availability of the
+                                   GPT-5.6 model family, introducing an 'ultra'
+                                   setting for parallel agent coordination."
+```
+
+`min_importance=5` da: **yuborilmasdi → yuboriladi.**
+
+OpenAI ning flagship model e'loni — bu dastur mavjud bo'lish sababining o'zi —
+jimgina tashlanardi. Hech qanday xato, hech qanday log. Faqat sukut.
+
+**Rubric aybdor emas edi.** Ilgari "taxmin bandi zaif" deb tashxis qo'ygandim
+(«Kimi 3 *expected to*» 6 ball olgani uchun). Noto'g'ri edi. Faqat marketing
+lead ini ko'rgan model uchun "2 = marketing" — *to'g'ri* javob. Model ishlagan,
+biz uni ochlikda qoldirgan ekanmiz. Promptni tuzatish muammoni yashirardi.
+
+Boshqa yo'nalishda ham to'g'irlandi: `v2.1.204` 6 → 2, `llm-meta-ai 0.1` 6 → 2.
+Kontekstsiz baho shunchaki shovqin bo'lar ekan — ikkala tomonga.
+
+19 tasi hali kalta: ba'zi saytlar botni rad etadi (techdirt 403). Ular feed
+lead ida qoladi — bu pol, yiqilish emas.
 
 ### P3 — Chuqurlik (~1 hafta)
 - Active research agent (Gemini + `google_search` grounding), kunlik top-3

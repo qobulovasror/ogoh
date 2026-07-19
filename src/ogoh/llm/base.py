@@ -15,8 +15,45 @@ class Verdict:
     index: int
     importance: int
     summary: str
+    summary_uz: str = ""
     tags: list[str] = field(default_factory=list)
     entities: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ResearchSource:
+    source: str
+    title: str
+    text: str
+    published: str = ""
+
+
+@dataclass(slots=True)
+class ResearchInput:
+    headline: str
+    entities: list[str]
+    coverage: list[ResearchSource]
+    background: list[ResearchSource]
+
+
+@dataclass(slots=True)
+class ResearchResult:
+    body: str
+    body_uz: str = ""
+
+
+@dataclass(slots=True)
+class PairInput:
+    index: int
+    left_title: str
+    right_title: str
+
+
+@dataclass(slots=True)
+class PairVerdict:
+    index: int
+    same_event: bool
+    reason: str = ""
 
 
 class LLMProvider(Protocol):
@@ -30,4 +67,15 @@ class LLMProvider(Protocol):
         May return fewer verdicts than items — callers must not assume alignment
         by position.
         """
+        ...
+
+    def judge_pairs(self, pairs: list[PairInput]) -> list[PairVerdict]:
+        """Did these two headlines report the same event, or two different ones?
+
+        Same index contract as classify_batch: match by index, never by position.
+        """
+        ...
+
+    def research(self, payload: ResearchInput) -> ResearchResult:
+        """Write up one story in depth, from its coverage and its run-up."""
         ...

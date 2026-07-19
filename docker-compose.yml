@@ -1,0 +1,28 @@
+# One service. No Postgres: at tens of users and ~30 new items a day the database
+# is a few hundred kilobytes written by a single process, which is squarely what
+# SQLite is for. Postgres would buy concurrent writers and pgvector — neither of
+# which anything here needs yet — in exchange for a container, a password, and a
+# backup story. Backup today is copying one file.
+#
+# Revisit when a second writer appears or vector search outgrows a Python loop.
+
+services:
+  bot:
+    build: .
+    image: ogoh:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Four slashes: sqlite://// means an absolute path. Three would put the
+      # database somewhere inside the container and lose it on the next deploy.
+      DATABASE_URL: sqlite:////data/ogoh.db
+    volumes:
+      - ogoh-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  ogoh-data:
