@@ -33,6 +33,13 @@ _MAX_TEXT_CHARS = 20_000
 _WORKERS = 6
 _TIMEOUT = 20.0
 
+# An article is prose; anything past this is a file that got linked, and reading
+# it whole would cost us the process. The timeout is no protection here — httpx
+# applies it per socket operation, so a slow steady drip of gigabytes never trips
+# it while _WORKERS of them run at once. Hence a cap on bytes read, enforced
+# during the read rather than after it.
+_MAX_BYTES = 2_000_000
+
 # The conventional bot format — what Googlebot and friends send. It names us, our
 # version and where to complain, which is the opposite of a disguise; it simply
 # has the shape servers parse. openai.com answers 403 to a bare "Ogoh/0.1" and
@@ -99,16 +106,29 @@ def _thin_items(session: Session, limit: int | None) -> list[Item]:
 
 def _fetch_text(url: str) -> str | None:
     try:
-        response = httpx.get(
+        with httpx.stream(
+            "GET",
             url,
             headers={"User-Agent": _USER_AGENT},
             timeout=_TIMEOUT,
             follow_redirects=True,
-        )
-        if response.is_error:
-            log.debug("extract: %s returned %d", url, response.status_code)
-            return None
-        return trafilatura.extract(response.text) or None
+        ) as response:
+            if response.is_error:
+                log.debug("extract: %s returned %d", url, response.status_code)
+                return None
+
+            chunks: list[bytes] = []
+            read = 0
+            for chunk in response.iter_bytes():
+                read += len(chunk)
+                if read > _MAX_BYTES:
+                    log.debug("extract: %s is over %d bytes, skipped", url, _MAX_BYTES)
+                    return None
+                chunks.append(chunk)
+
+            body = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+
+        return trafilatura.extract(body) or None
     except Exception as exc:
         # One unreachable host must not take the batch down; the item keeps its
         # feed lead, which is what it had a moment ago anyway.

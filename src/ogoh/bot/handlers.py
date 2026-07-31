@@ -247,7 +247,16 @@ async def handle_stop(message: Message) -> None:
         user = _get_or_create(session, message.from_user.id, message.from_user.username)
         user.is_active = False
         user.digest_mode = "off"
-    await message.answer("O'chirildi. <b>/start</b> bilan qaytasan.")
+    # This deactivates; it does not delete. The row keeps the telegram id, the
+    # username, the chosen topics, every feedback vote, and the dated ledger of
+    # everything ever delivered. Saying "deleted" while holding all of that was
+    # untrue, and the wording is the part that can be fixed in one line — real
+    # deletion needs a cascade across four tables and a decision about whether
+    # /start should then be able to bring the account back at all.
+    await message.answer(
+        "Obuna bekor qilindi — endi hech narsa yubormayman.\n"
+        "Sozlamalaring saqlanib qoladi, <b>/start</b> bilan o'sha yerdan davom etasan."
+    )
 
 
 def _get_or_create(session: Session, telegram_id: int, username: str | None) -> User:

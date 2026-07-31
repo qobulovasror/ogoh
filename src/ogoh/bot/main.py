@@ -14,6 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from ogoh import logsetup
 from ogoh.bot.handlers import router
 from ogoh.config import get_settings
 from ogoh.db.session import init_db
@@ -25,15 +26,25 @@ _INTERVAL_MINUTES = 20
 
 
 async def _tick(bot: Bot) -> None:
+    # Two try blocks, not one: collecting news and handing it over are separate
+    # concerns, and sharing a failure meant that a bad feed or an exhausted LLM
+    # quota also withheld the stories already sitting enriched in the database.
+    # Readers got silence at nine in the morning over something that had nothing
+    # to do with them.
+    #
+    # Swallowing at all, in both: a raising job gets dropped by APScheduler, so
+    # letting one through would end the bot's news for good.
     try:
         await asyncio.to_thread(run_pipeline)
+    except Exception:
+        log.exception("pipeline failed")
+
+    try:
         sent = await deliver_due_digests(bot)
         if sent:
             log.info("delivered %d digests", sent)
     except Exception:
-        # A raising job gets dropped by APScheduler; swallowing here keeps the
-        # schedule alive so one bad fetch doesn't end the bot's news forever.
-        log.exception("pipeline tick failed")
+        log.exception("delivery failed")
 
 
 async def _run() -> int:
@@ -77,10 +88,7 @@ async def _run() -> int:
 
 
 def run() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)-8s %(name)s: %(message)s",
-    )
+    logsetup.configure()
     try:
         return asyncio.run(_run())
     except KeyboardInterrupt:

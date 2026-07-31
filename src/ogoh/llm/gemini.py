@@ -1,6 +1,7 @@
 import logging
 
 from google import genai
+from google.genai import types
 from pydantic import BaseModel, Field
 
 from ogoh.llm.base import (
@@ -53,9 +54,24 @@ class _Research(BaseModel):
     body_uz: str = ""
 
 
+# Both of these are off by default in the SDK, and both defaults are wrong here.
+# Without a timeout the underlying httpx client waits forever, and a wedged call
+# blocks the pipeline thread — which max_instances=1 then turns into "no news
+# again, ever, until someone restarts the container". Retries are likewise
+# disabled unless retry_options is passed, so a single free-tier 429 threw away
+# a whole batch of twenty with no backoff before the next one.
+_TIMEOUT_MS = 120_000
+
+
 class GeminiProvider:
     def __init__(self, api_key: str, model: str) -> None:
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=_TIMEOUT_MS,
+                retry_options=types.HttpRetryOptions(),
+            ),
+        )
         self.model = model
 
     def classify_batch(self, items: list[EnrichInput]) -> list[Verdict]:

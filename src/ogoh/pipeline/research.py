@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ogoh.db.models import ClusterResearch, Item, ItemEnrichment
+from ogoh.db.models import ClusterResearch, Item, ItemEnrichment, Source
 from ogoh.llm.base import LLMProvider, ResearchInput, ResearchSource
 
 log = logging.getLogger(__name__)
@@ -115,8 +115,15 @@ def _gather(session: Session, cluster_id: int) -> ResearchInput | None:
     members = session.scalars(
         select(Item)
         .join(ItemEnrichment, ItemEnrichment.item_id == Item.id)
+        .join(Source, Source.id == Item.source_id)
         .where(func.coalesce(Item.cluster_id, Item.id) == cluster_id)
-        .order_by(Item.source.has(), ItemEnrichment.importance.desc())
+        # Trust tier first, the way digest.py picks a cluster's canonical item.
+        # This used to read Item.source.has(), which emits an EXISTS that is
+        # always true — source_id is a non-null foreign key — so every row
+        # sorted by the same constant and the tier was never consulted at all.
+        # The lead decides the deep dive's headline, so a tier-3 rewrite could
+        # front a story over the first-party announcement it was rewriting.
+        .order_by(Source.trust_tier.asc(), ItemEnrichment.importance.desc())
     ).all()
     if not members:
         return None

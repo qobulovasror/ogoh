@@ -4,6 +4,7 @@ import time
 from datetime import UTC, datetime
 
 import feedparser
+import httpx
 
 from ogoh.sources.base import RawItem
 
@@ -22,6 +23,12 @@ _WS_RE = re.compile(r"\s+")
 _RETRIES = 1
 _RETRY_PAUSE_SECONDS = 3.0
 
+# feedparser fetches through urllib, which takes no timeout and so inherits the
+# default of None — it waits forever. A host that accepts the connection and then
+# sends nothing hangs the ingest thread with no exception for ingest_all to
+# catch, and max_instances=1 means the scheduler never runs the job again. So we
+# do the fetch ourselves and hand feedparser the bytes, which it parses happily.
+_TIMEOUT = 30.0
 
 class RssSource:
     """Reads any RSS or Atom feed. feedparser normalises the two for us."""
@@ -33,15 +40,20 @@ class RssSource:
         self.url = url
         self.trust_tier = trust_tier
 
+    def _parse(self) -> feedparser.FeedParserDict:
+        response = httpx.get(self.url, timeout=_TIMEOUT, follow_redirects=True)
+        response.raise_for_status()
+        return feedparser.parse(response.content)
+
     def fetch(self) -> list[RawItem]:
-        feed = feedparser.parse(self.url)
+        feed = self._parse()
 
         for attempt in range(_RETRIES):
             if feed.entries:
                 break
             log.debug("%s: no entries, retrying in %ss", self.name, _RETRY_PAUSE_SECONDS)
             time.sleep(_RETRY_PAUSE_SECONDS * (attempt + 1))
-            feed = feedparser.parse(self.url)
+            feed = self._parse()
 
         # feedparser sets bozo on malformed XML but still parses what it can, so a
         # bozo feed with entries is worth keeping. Only the entry count decides.

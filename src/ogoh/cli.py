@@ -13,6 +13,7 @@ import argparse
 import logging
 import sys
 
+from ogoh import logsetup
 from ogoh.config import get_settings
 from ogoh.db.session import init_db, session_scope
 from ogoh.notify.telegram import send_message
@@ -31,10 +32,7 @@ def main() -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)-8s %(name)s: %(message)s",
-    )
+    logsetup.configure(logging.DEBUG if args.verbose else logging.INFO)
 
     settings = get_settings()
     init_db()
