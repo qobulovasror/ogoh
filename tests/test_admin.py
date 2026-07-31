@@ -181,6 +181,26 @@ def test_the_agent_page_shows_usage(client, session, make_user):
     assert (user.username or "") in resp.text
 
 
+def test_user_detail_shows_the_agent_transcript(client, session, make_user):
+    from datetime import UTC, datetime
+
+    from ogoh.db.models import AgentMessage
+
+    _login(client, session)
+    user = make_user()
+    session.add(
+        AgentMessage(
+            user_id=user.id, role="user", content="qanaqa savol", created_at=datetime.now(UTC)
+        )
+    )
+    session.commit()
+
+    resp = client.get(f"/users/{user.id}")
+
+    assert "Agent suhbati" in resp.text
+    assert "qanaqa savol" in resp.text
+
+
 def test_the_items_browser_lists_a_stored_item(client, session, make_item, make_enrichment):
     _login(client, session)
     make_enrichment(make_item("A findable headline"), importance=7)

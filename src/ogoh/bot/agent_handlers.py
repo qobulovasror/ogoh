@@ -18,7 +18,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 from sqlalchemy import select
 
-from ogoh.agent import budget, cache
+from ogoh.agent import audit, budget, cache
 from ogoh.agent.runner import run_turn
 from ogoh.agent.search import build_search_provider
 from ogoh.agent.types import Turn
@@ -106,9 +106,12 @@ def _process(
         if is_fresh:
             cached = cache.get_cached(session, user_message, settings.agent_cache_ttl_hours)
             if cached is not None:
+                audit.log_exchange(session, user.id, user_message, cached)
                 return "answer", cached, [], [], False
             if budget.remaining(session, user.id, settings.agent_daily_budget) <= 0:
-                return "answer", "Bugungi limit tugadi. Ertaga qayta urin.", [], [], False
+                limit_msg = "Bugungi limit tugadi. Ertaga qayta urin."
+                audit.log_exchange(session, user.id, user_message, limit_msg)
+                return "answer", limit_msg, [], [], False
 
         brain = GeminiProvider(api_key=settings.gemini_api_key, model=settings.agent_model)
         heavy = None
@@ -123,6 +126,7 @@ def _process(
             budget.spend(session, user.id)
             if reply.kind == "answer":
                 cache.put_cached(session, user_message, reply.text)
+        audit.log_exchange(session, user.id, user_message, reply.text)
 
     awaiting = reply.kind == "question"
     kept = [{"role": t.role, "content": t.content} for t in transcript] if awaiting else []

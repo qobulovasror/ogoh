@@ -239,6 +239,24 @@ class AgentQueryCache(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class AgentMessage(Base):
+    """A flat transcript of agent exchanges, for the admin to review.
+
+    One row per message — the user's question and the agent's answer (or its
+    clarifying question). Tool steps are not logged; the point is what the person
+    asked and what they got back, not the internal reasoning. Content is capped on
+    write so a long answer can't bloat the row.
+    """
+
+    __tablename__ = "agent_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # "user" | "assistant"
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class AdminLoginCode(Base):
     """A one-time code that logs the admin into the web panel.
 

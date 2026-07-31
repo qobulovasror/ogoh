@@ -20,6 +20,7 @@ from ogoh.admin import html
 from ogoh.admin.auth import SESSION_KEY, session_secret, verify_code
 from ogoh.config import Settings, get_settings
 from ogoh.db.models import (
+    AgentMessage,
     AgentQueryCache,
     AgentUsage,
     Feedback,
@@ -411,7 +412,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return HTMLResponse(html.page("404", "<h1>Topilmadi</h1>"), status_code=404)
             topics = {t.tag for t in user.topics}
             keywords = ", ".join(k.keyword for k in user.keywords)
-            body = _user_form(user, topics, keywords, msg)
+            messages = list(
+                session.scalars(
+                    select(AgentMessage)
+                    .where(AgentMessage.user_id == user.id)
+                    .order_by(AgentMessage.id.desc())
+                    .limit(20)
+                )
+            )
+            body = _user_form(user, topics, keywords, msg) + _transcript(messages)
         return HTMLResponse(html.page("Foydalanuvchi", body, active="/users"))
 
     @app.post("/users/{user_id}/update")
@@ -568,6 +577,18 @@ def _item_detail(item: Item, enr: ItemEnrichment | None, source_name: str, msg: 
         f"<h1>{escape(item.title)}</h1>{meta}{enrich}{reenrich}"
         f"<h2>To'liq matn</h2><pre>{text}</pre>"
     )
+
+
+def _transcript(messages) -> str:
+    """Recent agent exchanges for one user, newest first."""
+    if not messages:
+        return "<h2>Agent suhbati</h2><p class='muted'>Hali yozishma yo'q.</p>"
+    rows = "".join(
+        f"<div class='card'><span class='muted'>{_fmt(m.created_at)} · {escape(m.role)}</span>"
+        f"<br>{escape(m.content)}</div>"
+        for m in messages
+    )
+    return f"<h2>Agent suhbati</h2>{rows}"
 
 
 def _user_row(user: User) -> list[str]:

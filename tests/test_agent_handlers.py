@@ -15,7 +15,7 @@ from ogoh.agent.types import AgentAction
 from ogoh.bot import agent_handlers, handlers
 from ogoh.bot.agent_handlers import AgentStates, _process
 from ogoh.config import Settings
-from ogoh.db.models import AgentQueryCache, AgentUsage, User
+from ogoh.db.models import AgentMessage, AgentQueryCache, AgentUsage, User
 from ogoh.db.session import session_scope
 
 
@@ -93,6 +93,11 @@ def test_process_answers_and_spends_budget(session, monkeypatch):
     usage = session.scalar(select(AgentUsage).where(AgentUsage.user_id == user.id))
     assert usage.count == 1
     assert session.scalar(select(AgentQueryCache)) is not None  # answered fresh question cached
+    # The exchange is logged: one user row, one assistant row.
+    roles = sorted(
+        m.role for m in session.scalars(select(AgentMessage).where(AgentMessage.user_id == user.id))
+    )
+    assert roles == ["assistant", "user"]
 
 
 def test_process_refuses_when_the_budget_is_spent(session, monkeypatch):
