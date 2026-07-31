@@ -5,15 +5,17 @@ SQLite now and on Postgres later without a rewrite. JSON maps to JSONB on
 Postgres, which indexes fine, so this is not a decision that has to be undone.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     SmallInteger,
     String,
     Text,
@@ -133,6 +135,14 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+    # Gate for the interactive /ask agent. Off by default; an admin turns it on
+    # per person, because general web Q&A on a shared quota is not something to
+    # open to everyone. server_default, like text_complete, so the NOT NULL
+    # column applies to a users table that already holds rows.
+    agent_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+
     topics: Mapped[list["UserTopic"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -196,6 +206,36 @@ class ClusterResearch(Base):
     body: Mapped[str] = mapped_column(Text)
     body_uz: Mapped[str | None] = mapped_column(Text)
     model_used: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AgentUsage(Base):
+    """One row per user per day: how many agent questions they have spent.
+
+    The per-day budget lives here rather than in memory so it survives a restart
+    and is shared across processes. Keyed on (user, day) so yesterday's count
+    never bleeds into today's — a new day is simply a row that does not exist yet.
+    """
+
+    __tablename__ = "agent_usage"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AgentQueryCache(Base):
+    """A recent agent answer, keyed by a hash of the question.
+
+    General web Q&A means the same question gets asked more than once, and each
+    miss is a paid search plus an LLM call. A short TTL (checked in code, not the
+    schema) turns a repeat into a free lookup.
+    """
+
+    __tablename__ = "agent_query_cache"
+
+    query_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

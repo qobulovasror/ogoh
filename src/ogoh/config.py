@@ -53,6 +53,24 @@ class Settings(BaseSettings):
     admin_host: str = "127.0.0.1"
     admin_port: int = 8000
 
+    # Interactive research agent (/ask). Off unless a user is enabled AND a search
+    # key is set. General web Q&A, so the budget and cache below are load-bearing,
+    # not decoration: a handful of active users would drain Tavily's free monthly
+    # allowance in days without them.
+    tavily_api_key: str = ""
+    agent_model: str = "gemini-3.1-flash-lite"
+    search_max_results: int = 5
+    # Per user, per day. The main guard on a shared free-tier quota.
+    agent_daily_budget: int = 10
+    # Hard stops on one question's loop, so a confused model can't spend a whole
+    # budget on a single turn.
+    agent_max_tool_calls: int = 5
+    agent_max_web_searches: int = 3
+    # A repeated question inside this window reuses the stored answer, no new call.
+    agent_cache_ttl_hours: int = 6
+    # A conversation left idle this long is dropped, so its context stops growing.
+    agent_idle_timeout_minutes: int = 5
+
 
 @lru_cache
 def get_settings() -> Settings:
