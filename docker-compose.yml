@@ -24,5 +24,34 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # The admin panel. Same image and same database volume as the bot — a light
+  # second reader with the occasional write (source/user edits, a manual run).
+  admin:
+    build: .
+    image: ogoh:latest
+    command: ["ogoh-admin"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:////data/ogoh.db
+      # 0.0.0.0 so the published port reaches it inside the container. The host
+      # side below binds to loopback only, so it is not exposed to the internet —
+      # reach it over an SSH tunnel. Set ADMIN_TELEGRAM_ID in .env first, or the
+      # panel refuses every login.
+      ADMIN_HOST: 0.0.0.0
+    ports:
+      # Host loopback only. To open it publicly instead, change to "8000:8000"
+      # and put TLS (a reverse proxy) in front — the login travels in the clear.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ogoh-data:/data
+    depends_on:
+      - bot
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   ogoh-data:
