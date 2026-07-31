@@ -11,10 +11,10 @@ prose goes.
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, update
+from sqlalchemy import delete, func, update
 from sqlalchemy.orm import Session
 
-from ogoh.db.models import Item
+from ogoh.db.models import AgentMessage, AgentQueryCache, AgentUsage, Item
 
 log = logging.getLogger(__name__)
 
@@ -43,3 +43,40 @@ def prune_raw_text(session: Session, older_than_days: int) -> int:
     if pruned:
         log.info("retention: pruned raw_text from %d old items", pruned)
     return pruned
+
+
+def prune_agent_data(session: Session, retention_days: int, cache_ttl_hours: int) -> int:
+    """Drop stale agent rows: old transcript and usage, and expired cache entries.
+
+    The agent tables grow one row per question — small, but unbounded without
+    this. The cache is cleared by its own TTL (expired rows are dead weight the
+    read path already ignores); the transcript log and daily usage counters by the
+    retention window. Returns the total rows deleted.
+    """
+    now = datetime.now(UTC)
+    total = 0
+
+    if cache_ttl_hours > 0:
+        expired = session.execute(
+            delete(AgentQueryCache).where(
+                AgentQueryCache.created_at < now - timedelta(hours=cache_ttl_hours)
+            )
+        )
+        total += expired.rowcount or 0
+
+    if retention_days > 0:
+        old_messages = session.execute(
+            delete(AgentMessage).where(
+                AgentMessage.created_at < now - timedelta(days=retention_days)
+            )
+        )
+        total += old_messages.rowcount or 0
+
+        old_usage = session.execute(
+            delete(AgentUsage).where(AgentUsage.day < (now - timedelta(days=retention_days)).date())
+        )
+        total += old_usage.rowcount or 0
+
+    if total:
+        log.info("retention: pruned %d stale agent rows", total)
+    return total

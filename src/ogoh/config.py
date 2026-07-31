@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     agent_cache_ttl_hours: int = 6
     # A conversation left idle this long is dropped, so its context stops growing.
     agent_idle_timeout_minutes: int = 5
+    # How long the agent transcript log and daily usage rows are kept. The answer
+    # cache is pruned by its own TTL. 0 disables agent pruning.
+    agent_message_retention_days: int = 30
 
 
 @lru_cache

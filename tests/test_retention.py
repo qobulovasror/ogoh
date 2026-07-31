@@ -1,8 +1,11 @@
 """Old article text is dropped; everything derived from it is kept."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
-from ogoh.pipeline.retention import prune_raw_text
+from sqlalchemy import func, select
+
+from ogoh.db.models import AgentMessage, AgentQueryCache, AgentUsage
+from ogoh.pipeline.retention import prune_agent_data, prune_raw_text
 
 
 def _age(item, now, days):
@@ -63,3 +66,42 @@ def test_a_zero_retention_disables_pruning(session, make_item, now):
     assert prune_raw_text(session, 0) == 0
     session.refresh(old)
     assert old.raw_text == "body"
+
+
+def test_agent_data_prune_drops_stale_and_keeps_recent(session, make_user):
+    user = make_user()
+    now = datetime.now(UTC)
+    old = now - timedelta(days=100)
+
+    session.add_all(
+        [
+            AgentMessage(user_id=user.id, role="user", content="old", created_at=old),
+            AgentMessage(user_id=user.id, role="user", content="new", created_at=now),
+            AgentQueryCache(query_hash="stale", payload="x", created_at=old),
+            AgentQueryCache(query_hash="fresh", payload="x", created_at=now),
+            AgentUsage(user_id=user.id, day=old.date(), count=1),
+            AgentUsage(user_id=user.id, day=now.date(), count=1),
+        ]
+    )
+    session.commit()
+
+    prune_agent_data(session, retention_days=30, cache_ttl_hours=6)
+
+    session.expire_all()
+    assert session.scalar(select(func.count()).select_from(AgentMessage)) == 1
+    assert session.scalar(select(func.count()).select_from(AgentQueryCache)) == 1
+    assert session.scalar(select(func.count()).select_from(AgentUsage)) == 1
+    # The survivors are the recent ones.
+    assert session.scalar(select(AgentMessage.content)) == "new"
+
+
+def test_agent_data_prune_disabled_keeps_everything(session, make_user):
+    user = make_user()
+    old = datetime.now(UTC) - timedelta(days=500)
+    session.add(AgentMessage(user_id=user.id, role="user", content="old", created_at=old))
+    session.commit()
+
+    prune_agent_data(session, retention_days=0, cache_ttl_hours=0)
+
+    session.expire_all()
+    assert session.scalar(select(func.count()).select_from(AgentMessage)) == 1
