@@ -186,16 +186,23 @@ agent_query_cache(query_hash PK, payload TEXT,
 - Query cache (P0.5, shu bosqichda).
 - Testlar.
 
-### P1 — Chuqurlik
-- `fetch_page(url)` (trafilatura) — model to'liq sahifa so'raganda.
-- Tarix xulosalash (token).
-- Admin panelda agent statistikasi + transcript ko'rish.
+### P1 — Chuqurlik ✅
+- ✅ `fetch_page(url)` (trafilatura) — model to'liq sahifa so'raganda,
+  `agent_max_fetches` chegara.
+- ✅ Token nazorati: har observation `agent_obs_char_cap`gacha kesiladi, faqat
+  oxirgi `agent_history_turns` tur qayta yuboriladi.
+- ✅ Admin panelda agent statistikasi (`/agent`) + transcript ko'rish (user detail).
 
 ### P2 — Optimizatsiya
-- Native function-calling (structured-output o'rniga).
-- Hybrid model routing (flash-lite -> flash og'ir turda).
-- Redis FSM storage (restart-persistence).
-- Audit: `agent_session/agent_message`.
+- ⏸ **Native function-calling — kechiktirildi.** Jonli Gemini kalitisiz
+  `interactions.create` ning tool-calling yuzasini tekshirib bo'lmaydi, va hozirgi
+  structured-output (`agent_step`) xatti-harakatan ekvivalent hamda to'liq
+  testlangan. Tekshirilmagan API kodini yozib qo'yishdan ko'ra shu qoladi;
+  kalit paydo bo'lganda ko'chiriladi.
+- ✅ Hybrid model routing (flash-lite → flash) — `escalate` action + og'ir turda
+  forced-final.
+- ✅ Redis FSM storage — opt-in (`REDIS_URL`), memory'ga xavfsiz fallback.
+- ✅ Audit: `agent_messages` + admin transcript.
 
 ---
 
