@@ -104,6 +104,15 @@ def _thin_items(session: Session, limit: int | None) -> list[Item]:
     return list(session.scalars(stmt).all())
 
 
+def fetch_article_text(url: str) -> str | None:
+    """Public entry to the same byte-capped fetch the pipeline uses.
+
+    The agent's fetch_page tool wants exactly this — one page's prose, safely
+    bounded — so it reuses the extractor rather than growing a second copy.
+    """
+    return _fetch_text(url)
+
+
 def _fetch_text(url: str) -> str | None:
     try:
         with httpx.stream(

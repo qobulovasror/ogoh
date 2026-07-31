@@ -18,6 +18,7 @@ from ogoh.agent.corpus import search_corpus
 from ogoh.agent.search import SearchProvider
 from ogoh.agent.types import AgentBrain, AgentReply, Turn
 from ogoh.config import Settings
+from ogoh.pipeline.extract import fetch_article_text
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,8 @@ Each step, return ONE action:
 web for anything about AI models, labs, APIs, tools or research.
   web_search     — search the open web. Use for anything the corpus does not \
 cover, or any general question.
+  fetch_page     — read one URL's full text, when a search snippet is not enough. \
+Use sparingly; the snippet usually suffices.
   ask_user       — ask a short clarifying question when the request is ambiguous. \
 Prefer this over guessing.
   final_answer   — give the answer, with source URLs when you used any.
@@ -55,11 +58,14 @@ def run_turn(
     settings: Settings,
 ) -> AgentReply:
     """Advance the conversation by one user message. Mutates `transcript` in place."""
+    cap = settings.agent_obs_char_cap
+    window = settings.agent_history_turns
     transcript.append(Turn("user", user_message))
     web_searches = 0
+    fetches = 0
 
     for _ in range(settings.agent_max_tool_calls):
-        action = brain.agent_step(SYSTEM, _render(transcript))
+        action = brain.agent_step(SYSTEM, _render(transcript, window))
 
         if action.action == "final_answer":
             transcript.append(Turn("assistant", action.text))
@@ -71,7 +77,7 @@ def run_turn(
 
         if action.action == "search_corpus":
             hits = search_corpus(session, action.text)
-            transcript.append(Turn("tool", f"[corpus: {action.text}]\n{_format_corpus(hits)}"))
+            transcript.append(Turn("tool", _cap(f"[corpus: {action.text}]\n{_format_corpus(hits)}", cap)))
             continue
 
         if action.action == "web_search":
@@ -81,22 +87,40 @@ def run_turn(
                 transcript.append(Turn("tool", "[web] search limit reached for this question"))
             else:
                 web_searches += 1
-                transcript.append(
-                    Turn("tool", f"[web: {action.text}]\n{_format_web(search.search(action.text))}")
-                )
+                observation = f"[web: {action.text}]\n{_format_web(search.search(action.text))}"
+                transcript.append(Turn("tool", _cap(observation, cap)))
+            continue
+
+        if action.action == "fetch_page":
+            if fetches >= settings.agent_max_fetches:
+                transcript.append(Turn("tool", "[page] fetch limit reached for this question"))
+            else:
+                fetches += 1
+                text = fetch_article_text(action.text)
+                observation = f"[page: {action.text}]\n{text or '(could not read this page)'}"
+                transcript.append(Turn("tool", _cap(observation, cap)))
             continue
 
         transcript.append(Turn("tool", f"[error] unknown action {action.action!r}"))
 
     # Cap hit — one forced answer from what we have, rather than another tool call.
-    action = brain.agent_step(_FORCE, _render(transcript))
+    action = brain.agent_step(_FORCE, _render(transcript, window))
     text = action.text or "Yetarli ma'lumot topa olmadim."
     transcript.append(Turn("assistant", text))
     return AgentReply("answer", text, action.sources)
 
 
-def _render(transcript: list[Turn]) -> str:
-    return "\n\n".join(f"{turn.role}: {turn.content}" for turn in transcript)
+def _render(transcript: list[Turn], window: int) -> str:
+    # Only the tail is re-sent: older turns fall out so the prompt stays bounded
+    # however long the conversation runs.
+    recent = transcript[-window:] if window > 0 else transcript
+    return "\n\n".join(f"{turn.role}: {turn.content}" for turn in recent)
+
+
+def _cap(text: str, limit: int) -> str:
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit] + " …[truncated]"
 
 
 def _format_corpus(hits) -> str:

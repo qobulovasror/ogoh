@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # budget on a single turn.
     agent_max_tool_calls: int = 5
     agent_max_web_searches: int = 3
+    agent_max_fetches: int = 2
+    # Each tool observation is trimmed to this many characters before it goes back
+    # to the model — a single fetched page can be tens of thousands otherwise.
+    agent_obs_char_cap: int = 2_000
+    # Only the last N turns are re-sent each step, so a long conversation does not
+    # grow the prompt without bound.
+    agent_history_turns: int = 12
     # A repeated question inside this window reuses the stored answer, no new call.
     agent_cache_ttl_hours: int = 6
     # A conversation left idle this long is dropped, so its context stops growing.

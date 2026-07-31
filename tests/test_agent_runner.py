@@ -99,3 +99,49 @@ def test_web_search_limit_is_respected(session):
     run_turn(session, brain, search, "q", [], _settings(agent_max_web_searches=2))
 
     assert len(search.queries) == 2
+
+
+def test_fetch_page_reads_a_url(session, monkeypatch):
+    from ogoh.agent import runner
+
+    monkeypatch.setattr(runner, "fetch_article_text", lambda url: f"BODY of {url}")
+    brain = FakeBrain(
+        [
+            AgentAction("fetch_page", "https://a.test/article"),
+            AgentAction("final_answer", "o'qidim", ["https://a.test/article"]),
+        ]
+    )
+
+    run_turn(session, brain, None, "u haqda", [], _settings())
+
+    # The fetched body reached the model's next step.
+    assert "BODY of https://a.test/article" in brain.last_transcript
+
+
+def test_fetch_limit_is_respected(session, monkeypatch):
+    from ogoh.agent import runner
+
+    calls = []
+    monkeypatch.setattr(runner, "fetch_article_text", lambda url: calls.append(url) or "x")
+    actions = [AgentAction("fetch_page", f"https://a.test/{i}") for i in range(4)]
+    actions.append(AgentAction("final_answer", "done", []))
+    brain = FakeBrain(actions)
+
+    run_turn(session, brain, None, "q", [], _settings(agent_max_fetches=2))
+
+    assert len(calls) == 2
+
+
+def test_observations_are_capped(session, monkeypatch):
+    from ogoh.agent import runner
+
+    monkeypatch.setattr(runner, "fetch_article_text", lambda url: "A" * 10_000)
+    brain = FakeBrain(
+        [AgentAction("fetch_page", "https://a.test/x"), AgentAction("final_answer", "ok", [])]
+    )
+
+    run_turn(session, brain, None, "q", [], _settings(agent_obs_char_cap=500))
+
+    # The 10k body was trimmed before it re-entered the prompt.
+    assert "[truncated]" in brain.last_transcript
+    assert brain.last_transcript.count("A") < 1_000
