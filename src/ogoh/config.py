@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     # models, and classify/summarise is exactly the shape of work it is built for.
     gemini_model: str = "gemini-3.1-flash-lite"
 
+    # Fallback provider. Separate quota on a separate service, so when Gemini
+    # answers 429 or goes down the pipeline keeps enriching instead of going
+    # silent. Off unless a key is set; the model id is Groq's and operator-set.
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
+
     database_url: str = "sqlite:///ogoh.db"
 
     enrich_batch_size: int = 20

@@ -13,7 +13,10 @@ from ogoh.bot.keyboards import feedback_keyboard
 from ogoh.config import get_settings
 from ogoh.db.models import Delivery, User
 from ogoh.db.session import session_scope
+from ogoh.llm.base import LLMProvider
+from ogoh.llm.fallback import FallbackProvider
 from ogoh.llm.gemini import GeminiProvider
+from ogoh.llm.groq import GroqProvider
 from ogoh.pipeline.dedupe import assign_clusters
 from ogoh.pipeline.digest import render_telegram
 from ogoh.pipeline.enrich import enrich_pending
@@ -39,6 +42,26 @@ class PipelineStats:
     researched: int = 0
 
 
+def _build_provider(settings) -> LLMProvider | None:
+    """Gemini first, Groq behind it — whichever keys are set.
+
+    Both keys: a FallbackProvider that tries Gemini and drops to Groq on failure.
+    One key: that provider alone, no wrapper. No key: None, and the caller skips
+    every LLM step and says so.
+    """
+    providers: list[LLMProvider] = []
+    if settings.gemini_api_key:
+        providers.append(GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model))
+    if settings.groq_api_key:
+        providers.append(GroqProvider(api_key=settings.groq_api_key, model=settings.groq_model))
+
+    if not providers:
+        return None
+    if len(providers) == 1:
+        return providers[0]
+    return FallbackProvider(providers)
+
+
 def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> PipelineStats:
     """Refresh: ingest, cluster, enrich. Blocking — call it off the event loop.
 
@@ -48,11 +71,7 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
     settings = get_settings()
     stats = PipelineStats()
 
-    provider = (
-        GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model)
-        if settings.gemini_api_key and not skip_llm
-        else None
-    )
+    provider = None if skip_llm else _build_provider(settings)
 
     with session_scope() as session:
         ingested = ingest_all(session)
@@ -85,7 +104,7 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
 
         if provider is None:
             if not skip_llm:
-                log.error("GEMINI_API_KEY is not set — skipping enrichment")
+                log.error("no LLM key set (GEMINI_API_KEY / GROQ_API_KEY) — skipping enrichment")
             return stats
 
         enriched = enrich_pending(

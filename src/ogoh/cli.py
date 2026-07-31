@@ -37,7 +37,7 @@ def main() -> int:
     settings = get_settings()
     init_db()
 
-    if not args.dry_run and not settings.gemini_api_key:
+    if not args.dry_run and not (settings.gemini_api_key or settings.groq_api_key):
         log.error("GEMINI_API_KEY is not set — get one at https://aistudio.google.com/apikey")
         return 1
 
