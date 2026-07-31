@@ -112,6 +112,78 @@ async def test_an_unknown_mode_is_refused(session):
     assert callback.answered == ["Noma'lum rejim"]
 
 
+async def test_time_sets_the_digest_hour(session):
+    await handlers.handle_start(StubMessage())
+
+    await handlers.handle_hour_set(StubCallback(data="hour:7"))
+
+    session.expire_all()
+    assert session.scalar(select(User).where(User.telegram_id == 42)).digest_hour == 7
+
+
+async def test_an_out_of_range_hour_is_refused(session):
+    await handlers.handle_start(StubMessage())
+
+    callback = StubCallback(data="hour:25")
+    await handlers.handle_hour_set(callback)
+
+    session.expire_all()
+    assert session.scalar(select(User).where(User.telegram_id == 42)).digest_hour == 9
+    assert callback.answered == ["Noto'g'ri soat"]
+
+
+async def test_zone_sets_the_timezone(session):
+    await handlers.handle_start(StubMessage())
+
+    await handlers.handle_zone_set(StubCallback(data="tz:Europe/Moscow"))
+
+    session.expire_all()
+    assert session.scalar(select(User).where(User.telegram_id == 42)).timezone == "Europe/Moscow"
+
+
+async def test_an_unknown_zone_is_refused(session):
+    await handlers.handle_start(StubMessage())
+
+    callback = StubCallback(data="tz:Mars/Olympus")
+    await handlers.handle_zone_set(callback)
+
+    session.expire_all()
+    assert session.scalar(select(User).where(User.telegram_id == 42)).timezone == "Asia/Tashkent"
+    assert callback.answered == ["Noma'lum mintaqa"]
+
+
+async def test_level_sets_the_threshold(session):
+    await handlers.handle_start(StubMessage())
+
+    await handlers.handle_level_set(StubCallback(data="level:8"))
+
+    session.expire_all()
+    assert session.scalar(select(User).where(User.telegram_id == 42)).min_importance == 8
+
+
+async def test_a_level_off_the_menu_is_refused(session):
+    await handlers.handle_start(StubMessage())
+
+    callback = StubCallback(data="level:7")
+    await handlers.handle_level_set(callback)
+
+    session.expire_all()
+    assert session.scalar(select(User).where(User.telegram_id == 42)).min_importance == 5
+    assert callback.answered == ["Noma'lum daraja"]
+
+
+async def test_settings_reflects_the_current_choices(session):
+    await handlers.handle_start(StubMessage())
+    await handlers.handle_hour_set(StubCallback(data="hour:7"))
+    await handlers.handle_zone_set(StubCallback(data="tz:Europe/Moscow"))
+
+    message = StubMessage()
+    await handlers.handle_settings(message)
+
+    assert "07:00" in message.replies[0]
+    assert "Europe/Moscow" in message.replies[0]
+
+
 async def test_pause_stops_the_digest_but_keeps_the_account(session):
     await handlers.handle_start(StubMessage())
 

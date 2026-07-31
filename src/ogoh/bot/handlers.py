@@ -19,21 +19,30 @@ from sqlalchemy.orm import Session
 from ogoh.bot.keyboards import (
     DONE,
     FREQ_PREFIX,
+    HOUR_PREFIX,
     LANG_PREFIX,
+    LEVEL_KEYS,
+    LEVEL_PREFIX,
     TOPIC_PREFIX,
+    TZ_PREFIX,
     VOTE_PREFIX,
+    ZONE_KEYS,
     feedback_keyboard,
     freq_keyboard,
     freq_label,
+    hour_keyboard,
     lang_keyboard,
     lang_label,
+    level_keyboard,
+    level_label,
     topics_keyboard,
+    tz_keyboard,
 )
 from ogoh.db.models import Feedback, User, UserTopic
 from ogoh.db.session import session_scope
 from ogoh.pipeline.digest import render_telegram
 from ogoh.pipeline.match import pending_for_user
-from ogoh.taxonomy import TAG_KEYS
+from ogoh.taxonomy import LABELS_UZ, TAG_KEYS
 
 log = logging.getLogger(__name__)
 
@@ -45,8 +54,12 @@ _WELCOME = (
     "o'zgarishlari, API yangiliklari — va faqat senga keragini yuboraman.\n\n"
     "<b>/topics</b> — qaysi mavzular qiziq\n"
     "<b>/freq</b> — qanchalik tez-tez xabar berish\n"
+    "<b>/time</b> — kunlik yig'ma soati\n"
+    "<b>/zone</b> — vaqt mintaqang\n"
+    "<b>/level</b> — muhimlik chegarasi\n"
     "<b>/preview</b> — hozir nima bor, ko'rib ol\n"
     "<b>/lang</b> — xulosalar tili\n"
+    "<b>/settings</b> — hamma sozlama bir joyda\n"
     "<b>/pause</b> — vaqtincha to'xtatish\n"
     "<b>/stop</b> — butunlay o'chirish\n\n"
     "Hozircha barcha mavzular yoqilgan. <b>/topics</b> bilan toraytir."
@@ -227,6 +240,125 @@ async def handle_lang_set(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):
         await callback.message.edit_text(f"Til: <b>{lang_label(code)}</b>")
     await callback.answer()
+
+
+@router.message(Command("time"))
+async def handle_time(message: Message) -> None:
+    if message.from_user is None:
+        return
+    with session_scope() as session:
+        user = _get_or_create(session, message.from_user.id, message.from_user.username)
+        current = user.digest_hour
+    await message.answer(
+        "Kunlik yig'ma soati? <i>(vaqt mintaqang bo'yicha — /zone bilan o'zgartir)</i>",
+        reply_markup=hour_keyboard(current),
+    )
+
+
+@router.callback_query(F.data.startswith(f"{HOUR_PREFIX}:"))
+async def handle_hour_set(callback: CallbackQuery) -> None:
+    if callback.from_user is None or not isinstance(callback.data, str):
+        return
+    try:
+        hour = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer()
+        return
+    if not 0 <= hour <= 23:
+        await callback.answer("Noto'g'ri soat")
+        return
+
+    with session_scope() as session:
+        user = _get_or_create(session, callback.from_user.id, callback.from_user.username)
+        # last_digest_at is left alone on purpose: the 23h gap in is_due is what
+        # stops a same-day change re-sending, and clearing it here would undo that.
+        user.digest_hour = hour
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(f"Yig'ma soati: <b>{hour:02d}:00</b>")
+    await callback.answer()
+
+
+@router.message(Command("zone"))
+async def handle_zone(message: Message) -> None:
+    if message.from_user is None:
+        return
+    with session_scope() as session:
+        user = _get_or_create(session, message.from_user.id, message.from_user.username)
+        current = user.timezone
+    await message.answer("Vaqt mintaqang?", reply_markup=tz_keyboard(current))
+
+
+@router.callback_query(F.data.startswith(f"{TZ_PREFIX}:"))
+async def handle_zone_set(callback: CallbackQuery) -> None:
+    if callback.from_user is None or not isinstance(callback.data, str):
+        return
+    zone = callback.data.split(":", 1)[1]
+    if zone not in ZONE_KEYS:
+        await callback.answer("Noma'lum mintaqa")
+        return
+
+    with session_scope() as session:
+        user = _get_or_create(session, callback.from_user.id, callback.from_user.username)
+        user.timezone = zone
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(f"Vaqt mintaqa: <b>{zone}</b>")
+    await callback.answer()
+
+
+@router.message(Command("level"))
+async def handle_level(message: Message) -> None:
+    if message.from_user is None:
+        return
+    with session_scope() as session:
+        user = _get_or_create(session, message.from_user.id, message.from_user.username)
+        current = user.min_importance
+    await message.answer(
+        "Qanchalik muhim yangilik kerak? Pastroq chegara ko'proq xabar demakdir.",
+        reply_markup=level_keyboard(current),
+    )
+
+
+@router.callback_query(F.data.startswith(f"{LEVEL_PREFIX}:"))
+async def handle_level_set(callback: CallbackQuery) -> None:
+    if callback.from_user is None or not isinstance(callback.data, str):
+        return
+    try:
+        level = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer()
+        return
+    if level not in LEVEL_KEYS:
+        await callback.answer("Noma'lum daraja")
+        return
+
+    with session_scope() as session:
+        user = _get_or_create(session, callback.from_user.id, callback.from_user.username)
+        user.min_importance = level
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(f"Muhimlik chegarasi: <b>{level}+</b>")
+    await callback.answer()
+
+
+@router.message(Command("settings"))
+async def handle_settings(message: Message) -> None:
+    """Every current preference on one screen, with the command that changes each."""
+    if message.from_user is None:
+        return
+    with session_scope() as session:
+        user = _get_or_create(session, message.from_user.id, message.from_user.username)
+        topics = [LABELS_UZ.get(topic.tag, topic.tag) for topic in user.topics]
+        text = (
+            "<b>Sozlamalar</b>\n\n"
+            f"Rejim: <b>{freq_label(user.digest_mode)}</b>  /freq\n"
+            f"Vaqt: <b>{user.digest_hour:02d}:00</b> ({user.timezone})  /time /zone\n"
+            f"Muhimlik: <b>{level_label(user.min_importance)}</b>  /level\n"
+            f"Til: <b>{lang_label(user.lang)}</b>  /lang\n"
+            f"Mavzular: <b>{', '.join(topics) if topics else 'hammasi'}</b>  /topics"
+        )
+    await message.answer(text)
 
 
 @router.message(Command("pause"))
