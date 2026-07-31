@@ -1,4 +1,5 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -15,6 +16,12 @@ log = logging.getLogger(__name__)
 
 _MAX_TEXT_CHARS = 20_000
 
+# Fetches run concurrently: a dozen feeds each with a 30s timeout are minutes of
+# wall-clock end to end when walked one at a time, and one slow host stalls every
+# feed behind it. Only the network call is parallel — nothing here touches the
+# session, and the results are stored back on this thread, in source order.
+_FETCH_WORKERS = 8
+
 
 @dataclass(slots=True)
 class IngestStats:
@@ -29,16 +36,23 @@ def ingest_all(session: Session, fetchers: tuple[SourceFetcher, ...] = FETCHERS)
     stats = IngestStats()
     cutoff = datetime.now(UTC) - timedelta(days=get_settings().max_age_days)
 
+    # Sync the source rows first, on this thread: the id assigned here is what the
+    # per-source uid namespace hangs off, so it has to exist before anything stores.
+    active = []
     for fetcher in fetchers:
         source = _upsert_source(session, fetcher)
-        if not source.enabled:
-            continue
+        if source.enabled:
+            active.append((source, fetcher))
+    session.flush()
 
-        try:
-            raw_items = fetcher.fetch()
-        except Exception:
-            # One bad feed must not take the run down — the other four still have news.
-            log.exception("source %r failed to fetch", fetcher.name)
+    with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
+        fetched = list(pool.map(_fetch_source, active))
+
+    now = datetime.now(UTC)
+    for source, fetcher, raw_items, error in fetched:
+        if error is not None:
+            # One bad feed must not take the run down — the others still have news.
+            log.error("source %r failed to fetch", fetcher.name, exc_info=error)
             stats.failed_sources.append(fetcher.name)
             continue
 
@@ -57,10 +71,22 @@ def ingest_all(session: Session, fetchers: tuple[SourceFetcher, ...] = FETCHERS)
             else:
                 stats.duplicate += 1
 
-        source.last_fetched_at = datetime.now(UTC)
+        source.last_fetched_at = now
         session.flush()
 
     return stats
+
+
+def _fetch_source(
+    pair: tuple[Source, SourceFetcher],
+) -> tuple[Source, SourceFetcher, list[RawItem], Exception | None]:
+    """Run one feed's network fetch. Errors are returned, not raised, so a single
+    dead host does not sink the whole pool.map — and never touches the session."""
+    source, fetcher = pair
+    try:
+        return source, fetcher, fetcher.fetch(), None
+    except Exception as exc:
+        return source, fetcher, [], exc
 
 
 def _is_stale(raw: RawItem, cutoff: datetime) -> bool:
