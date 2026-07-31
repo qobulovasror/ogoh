@@ -33,3 +33,10 @@ class StubCallback:
 
     async def answer(self, text=None, **kwargs):
         self.answered.append(text)
+
+
+@dataclass
+class StubCommand:
+    """Stands in for aiogram's CommandObject — handlers only read `.args`."""
+
+    args: str | None = None

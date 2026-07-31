@@ -42,6 +42,7 @@ def pending_for_user(session: Session, user: User, limit: int = 10) -> list[Dige
     )
 
     topics = {topic.tag for topic in user.topics}
+    keywords = {keyword.keyword for keyword in user.keywords}
     delivered = set(
         session.scalars(select(Delivery.cluster_id).where(Delivery.user_id == user.id))
     )
@@ -51,16 +52,33 @@ def pending_for_user(session: Session, user: User, limit: int = 10) -> list[Dige
         cluster = entry.item.cluster_id or entry.item.id
         if cluster in delivered:
             continue
-        # An empty topic set means "hasn't picked yet", not "wants nothing".
-        # Sending everything beats sending silence to someone who never ran
-        # /topics and would just conclude the bot is broken.
-        if topics and not topics.intersection(entry.enrichment.tags):
+        # No topics and no keywords means "hasn't narrowed anything", not "wants
+        # nothing". Sending everything beats sending silence to someone who never
+        # picked and would just conclude the bot is broken.
+        if (topics or keywords) and not _interested(entry, topics, keywords):
             continue
         matched.append(entry)
         if len(matched) >= limit:
             break
 
     return matched
+
+
+def _interested(entry: DigestEntry, topics: set[str], keywords: set[str]) -> bool:
+    """Tag OR keyword. Either kind of interest is enough to pass a story through.
+
+    Keywords are matched loosely — a substring of the title or of any extracted
+    entity — so "anthropic" catches "Anthropic ships…" and "MCP" catches an item
+    whose entities list names it, without the reader having to spell either exactly.
+    """
+    if topics and topics.intersection(entry.enrichment.tags):
+        return True
+    if keywords:
+        haystack = entry.item.title.lower()
+        entities = " ".join(entry.enrichment.entities or []).lower()
+        if any(keyword in haystack or keyword in entities for keyword in keywords):
+            return True
+    return False
 
 
 def is_due(user: User, now: datetime) -> bool:

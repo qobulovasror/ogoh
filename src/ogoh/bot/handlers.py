@@ -9,9 +9,10 @@ pipeline is the opposite kind of work and runs in a thread — see worker.py.
 
 import logging
 from datetime import UTC, datetime
+from html import escape
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -38,7 +39,7 @@ from ogoh.bot.keyboards import (
     topics_keyboard,
     tz_keyboard,
 )
-from ogoh.db.models import Feedback, User, UserTopic
+from ogoh.db.models import Feedback, User, UserKeyword, UserTopic
 from ogoh.db.session import session_scope
 from ogoh.pipeline.digest import render_telegram
 from ogoh.pipeline.match import pending_for_user
@@ -53,6 +54,7 @@ _WELCOME = (
     "AI olamidagi yangiliklarni kuzataman — yangi modellar, narx va limit "
     "o'zgarishlari, API yangiliklari — va faqat senga keragini yuboraman.\n\n"
     "<b>/topics</b> — qaysi mavzular qiziq\n"
+    "<b>/keywords</b> — erkin kalit so'zlar\n"
     "<b>/freq</b> — qanchalik tez-tez xabar berish\n"
     "<b>/time</b> — kunlik yig'ma soati\n"
     "<b>/zone</b> — vaqt mintaqang\n"
@@ -342,6 +344,65 @@ async def handle_level_set(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+# A guard, not a real limit: nobody filters on twenty words, but an accidental
+# paste of a paragraph should not become two hundred rows.
+_MAX_KEYWORDS = 20
+
+
+def _parse_keywords(raw: str) -> list[str]:
+    seen: list[str] = []
+    for part in raw.replace("\n", ",").split(","):
+        keyword = part.strip().lower()[:32]
+        if keyword and keyword not in seen:
+            seen.append(keyword)
+        if len(seen) >= _MAX_KEYWORDS:
+            break
+    return seen
+
+
+@router.message(Command("keywords"))
+async def handle_keywords(message: Message, command: CommandObject) -> None:
+    """Free-text interests, on top of the fixed /topics taxonomy.
+
+    `/keywords` shows the current list; `/keywords MCP, Anthropic` replaces it;
+    `/keywords tozala` clears it. Replace rather than append: a set the reader can
+    see in full and retype is simpler than an add/remove protocol over chat.
+    """
+    if message.from_user is None:
+        return
+    raw = (command.args or "").strip()
+
+    with session_scope() as session:
+        user = _get_or_create(session, message.from_user.id, message.from_user.username)
+
+        if not raw:
+            current = [keyword.keyword for keyword in user.keywords]
+            shown = escape(", ".join(current)) if current else "(bo'sh)"
+            await message.answer(
+                f"Kalit so'zlaring: <b>{shown}</b>\n\n"
+                "O'zgartirish: <code>/keywords MCP, Anthropic, rate limit</code>\n"
+                "Tozalash: <code>/keywords tozala</code>\n\n"
+                "<i>Mavzu teglaridan tashqari — sarlavha yoki nomlarda shu so'z "
+                "uchrasa, yangilik o'tadi.</i>"
+            )
+            return
+
+        for existing in list(user.keywords):
+            session.delete(existing)
+        session.flush()
+
+        if raw.lower() in ("tozala", "clear", "-"):
+            await message.answer("Kalit so'zlar tozalandi.")
+            return
+
+        keywords = _parse_keywords(raw)
+        for keyword in keywords:
+            session.add(UserKeyword(user_id=user.id, keyword=keyword))
+        shown = escape(", ".join(keywords)) if keywords else "(bo'sh)"
+
+    await message.answer(f"Saqlandi: <b>{shown}</b>")
+
+
 @router.message(Command("settings"))
 async def handle_settings(message: Message) -> None:
     """Every current preference on one screen, with the command that changes each."""
@@ -350,13 +411,17 @@ async def handle_settings(message: Message) -> None:
     with session_scope() as session:
         user = _get_or_create(session, message.from_user.id, message.from_user.username)
         topics = [LABELS_UZ.get(topic.tag, topic.tag) for topic in user.topics]
+        keywords = [keyword.keyword for keyword in user.keywords]
+        topics_shown = ", ".join(topics) if topics else "hammasi"
+        keywords_shown = escape(", ".join(keywords)) if keywords else "(bo'sh)"
         text = (
             "<b>Sozlamalar</b>\n\n"
             f"Rejim: <b>{freq_label(user.digest_mode)}</b>  /freq\n"
             f"Vaqt: <b>{user.digest_hour:02d}:00</b> ({user.timezone})  /time /zone\n"
             f"Muhimlik: <b>{level_label(user.min_importance)}</b>  /level\n"
             f"Til: <b>{lang_label(user.lang)}</b>  /lang\n"
-            f"Mavzular: <b>{', '.join(topics) if topics else 'hammasi'}</b>  /topics"
+            f"Mavzular: <b>{topics_shown}</b>  /topics\n"
+            f"Kalit so'zlar: <b>{keywords_shown}</b>  /keywords"
         )
     await message.answer(text)
 

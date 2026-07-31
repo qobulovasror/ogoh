@@ -136,6 +136,9 @@ class User(Base):
     topics: Mapped[list["UserTopic"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
+    keywords: Mapped[list["UserKeyword"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+    )
 
 
 class UserTopic(Base):
@@ -145,6 +148,22 @@ class UserTopic(Base):
     tag: Mapped[str] = mapped_column(String(32), primary_key=True)
 
     user: Mapped[User] = relationship(back_populates="topics")
+
+
+class UserKeyword(Base):
+    """A free-text interest, matched against an item's title and entities.
+
+    The taxonomy in user_topics is a closed set of ten; this is the escape hatch
+    for the reader who wants "MCP" or "Anthropic" specifically. Stored lowercased
+    so the match is a plain case-insensitive containment, no per-query folding.
+    """
+
+    __tablename__ = "user_keywords"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    keyword: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+    user: Mapped[User] = relationship(back_populates="keywords")
 
 
 class Delivery(Base):

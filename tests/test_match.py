@@ -1,6 +1,5 @@
 from datetime import UTC, datetime, timedelta
 
-
 from ogoh.pipeline.match import INSTANT_MIN_IMPORTANCE, is_due, pending_for_user
 
 # 09:00 in Asia/Tashkent (UTC+5), the default digest hour.
@@ -96,6 +95,56 @@ def test_no_topics_means_everything(session, make_user, make_item, make_enrichme
 
     user = make_user(topics=[])
     assert len(pending_for_user(session, user)) == 2
+
+
+def test_a_keyword_filters_the_digest(session, make_user, make_item, make_enrichment):
+    from ogoh.db.models import UserKeyword
+
+    make_enrichment(make_item("Anthropic ships Claude Opus"), importance=7, tags=["model-release"])
+    make_enrichment(make_item("Someone raised a round"), importance=7, tags=["funding-business"])
+
+    user = make_user(topics=[])
+    session.add(UserKeyword(user_id=user.id, keyword="anthropic"))
+    session.flush()
+    session.refresh(user)
+
+    titles = [entry.item.title for entry in pending_for_user(session, user)]
+    assert titles == ["Anthropic ships Claude Opus"]
+
+
+def test_keyword_matches_extracted_entities(session, make_user, make_item, make_enrichment):
+    from ogoh.db.models import UserKeyword
+
+    item = make_item("A cryptic headline that names nothing")
+    enrichment = make_enrichment(item, importance=7, tags=["research"])
+    enrichment.entities = ["MCP"]
+    session.flush()
+
+    user = make_user(topics=[])
+    session.add(UserKeyword(user_id=user.id, keyword="mcp"))
+    session.flush()
+    session.refresh(user)
+
+    assert len(pending_for_user(session, user)) == 1
+
+
+def test_topic_or_keyword_either_passes(session, make_user, make_item, make_enrichment):
+    from ogoh.db.models import UserKeyword
+
+    # Matches the topic, not the keyword.
+    make_enrichment(make_item("A new model ships"), importance=7, tags=["model-release"])
+    # Matches the keyword, not the topic.
+    make_enrichment(make_item("Anthropic hires a team"), importance=7, tags=["funding-business"])
+    # Matches neither.
+    make_enrichment(make_item("A datacenter opens"), importance=7, tags=["infra-hardware"])
+
+    user = make_user(topics=["model-release"])
+    session.add(UserKeyword(user_id=user.id, keyword="anthropic"))
+    session.flush()
+    session.refresh(user)
+
+    titles = sorted(entry.item.title for entry in pending_for_user(session, user))
+    assert titles == ["A new model ships", "Anthropic hires a team"]
 
 
 def test_importance_floor_applies(session, make_user, make_item, make_enrichment):

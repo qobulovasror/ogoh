@@ -7,10 +7,10 @@ this file is a subscription silently not being saved, not a keyboard drawn wrong
 """
 
 from sqlalchemy import func, select
-from stubs import StubCallback, StubMessage, StubUser
+from stubs import StubCallback, StubCommand, StubMessage, StubUser
 
 from ogoh.bot import handlers
-from ogoh.db.models import Delivery, User, UserTopic
+from ogoh.db.models import Delivery, User, UserKeyword, UserTopic
 
 
 async def test_start_registers_the_person(session):
@@ -170,6 +170,47 @@ async def test_a_level_off_the_menu_is_refused(session):
     session.expire_all()
     assert session.scalar(select(User).where(User.telegram_id == 42)).min_importance == 5
     assert callback.answered == ["Noma'lum daraja"]
+
+
+async def test_keywords_are_saved_lowercased_and_deduped(session):
+    await handlers.handle_start(StubMessage())
+
+    await handlers.handle_keywords(StubMessage(), StubCommand(args="MCP, Anthropic, mcp"))
+
+    session.expire_all()
+    stored = {k.keyword for k in session.scalars(select(UserKeyword)).all()}
+    assert stored == {"mcp", "anthropic"}
+
+
+async def test_keywords_replace_rather_than_append(session):
+    await handlers.handle_start(StubMessage())
+    await handlers.handle_keywords(StubMessage(), StubCommand(args="mcp"))
+
+    await handlers.handle_keywords(StubMessage(), StubCommand(args="gemini"))
+
+    session.expire_all()
+    stored = {k.keyword for k in session.scalars(select(UserKeyword)).all()}
+    assert stored == {"gemini"}
+
+
+async def test_keywords_can_be_cleared(session):
+    await handlers.handle_start(StubMessage())
+    await handlers.handle_keywords(StubMessage(), StubCommand(args="mcp, claude"))
+
+    await handlers.handle_keywords(StubMessage(), StubCommand(args="tozala"))
+
+    session.expire_all()
+    assert session.scalar(select(func.count()).select_from(UserKeyword)) == 0
+
+
+async def test_keywords_with_no_args_shows_the_current_list(session):
+    await handlers.handle_start(StubMessage())
+    await handlers.handle_keywords(StubMessage(), StubCommand(args="mcp"))
+
+    message = StubMessage()
+    await handlers.handle_keywords(message, StubCommand(args=None))
+
+    assert "mcp" in message.replies[0]
 
 
 async def test_settings_reflects_the_current_choices(session):
