@@ -40,3 +40,27 @@ class StubCommand:
     """Stands in for aiogram's CommandObject — handlers only read `.args`."""
 
     args: str | None = None
+
+
+class StubState:
+    """Stands in for aiogram's FSMContext — an in-memory data bag."""
+
+    def __init__(self):
+        self.state = None
+        self._data = {}
+
+    async def set_state(self, state):
+        self.state = state
+
+    async def set_data(self, data):
+        self._data = dict(data)
+
+    async def update_data(self, **kwargs):
+        self._data.update(kwargs)
+
+    async def get_data(self):
+        return dict(self._data)
+
+    async def clear(self):
+        self.state = None
+        self._data = {}

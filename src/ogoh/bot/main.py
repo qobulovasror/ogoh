@@ -15,6 +15,7 @@ from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from ogoh import logsetup
+from ogoh.bot.agent_handlers import agent_router
 from ogoh.bot.handlers import router
 from ogoh.config import get_settings
 from ogoh.db.session import init_db
@@ -59,8 +60,11 @@ async def _run() -> int:
         settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    # Default MemoryStorage backs the agent FSM — fine at this size; a restart
+    # just drops any open /ask conversation, which is recoverable by asking again.
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
+    dispatcher.include_router(agent_router)
 
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(

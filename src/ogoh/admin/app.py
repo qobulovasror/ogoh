@@ -379,6 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if tz:
                 user.timezone = tz
             user.is_active = form.get("is_active") == "on"
+            user.agent_enabled = form.get("agent_enabled") == "on"
 
             # Rebuild the rule sets from the form: the checked topics and the typed
             # keywords replace whatever was there.
@@ -550,6 +551,8 @@ def _user_form(user: User, topics: set[str], keywords: str, msg: str) -> str:
         f"<div><label>Min importance</label><input name='min_importance' type='number' min='0' max='10' value='{user.min_importance}' size='2'></div>"
         "<div><label>Faol</label><input type='checkbox' name='is_active'"
         f"{' checked' if user.is_active else ''}></div>"
+        "<div><label>Agent (/ask)</label><input type='checkbox' name='agent_enabled'"
+        f"{' checked' if user.agent_enabled else ''}></div>"
         "</div>"
         f"<label>Mavzular (qoidalar)</label><div>{topic_boxes}</div>"
         f"<label>Kalit so'zlar</label><input name='keywords' size='50' value='{escape(keywords)}'>"

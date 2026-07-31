@@ -4,6 +4,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from ogoh.agent.types import AgentAction
 from ogoh.llm.base import (
     EnrichInput,
     PairInput,
@@ -52,6 +53,12 @@ class _PairBatch(BaseModel):
 class _Research(BaseModel):
     body: str
     body_uz: str = ""
+
+
+class _Action(BaseModel):
+    action: str
+    text: str = ""
+    sources: list[str] = Field(default_factory=list)
 
 
 # Both of these are off by default in the SDK, and both defaults are wrong here.
@@ -140,3 +147,25 @@ class GeminiProvider:
         )
         result = _Research.model_validate_json(interaction.output_text)
         return ResearchResult(body=result.body.strip(), body_uz=result.body_uz.strip())
+
+    def agent_step(self, system: str, transcript: str) -> AgentAction:
+        """One decision in the /ask agent loop: pick the next action.
+
+        Structured output rather than native function-calling: it reuses the same
+        response_format path as the rest of this provider, and the runner — not
+        the model — actually executes the tool. temperature stays low; this is a
+        routing decision, not writing.
+        """
+        interaction = self._client.interactions.create(
+            model=self.model,
+            input=transcript,
+            system_instruction=system,
+            generation_config={"temperature": 0.2},
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": _Action.model_json_schema(),
+            },
+        )
+        action = _Action.model_validate_json(interaction.output_text)
+        return AgentAction(action=action.action, text=action.text, sources=action.sources)

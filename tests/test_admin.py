@@ -142,6 +142,29 @@ def test_admin_can_rewrite_a_users_rules(client, session, make_user):
     }
 
 
+def test_admin_can_enable_the_agent_for_a_user(client, session, make_user):
+    _login(client, session)
+    user = make_user()
+    session.commit()
+    assert user.agent_enabled is False
+
+    client.post(
+        f"/users/{user.id}/update",
+        data={
+            "digest_mode": user.digest_mode,
+            "lang": user.lang,
+            "digest_hour": str(user.digest_hour),
+            "timezone": user.timezone,
+            "min_importance": str(user.min_importance),
+            "is_active": "on",
+            "agent_enabled": "on",
+        },
+    )
+
+    session.expire_all()
+    assert session.get(User, user.id).agent_enabled is True
+
+
 def test_the_items_browser_lists_a_stored_item(client, session, make_item, make_enrichment):
     _login(client, session)
     make_enrichment(make_item("A findable headline"), importance=7)
