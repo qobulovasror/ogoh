@@ -8,6 +8,7 @@ pipeline is the opposite kind of work and runs in a thread — see worker.py.
 """
 
 import logging
+import secrets
 from datetime import UTC, datetime, timedelta
 from html import escape
 
@@ -40,7 +41,16 @@ from ogoh.bot.keyboards import (
     tz_keyboard,
 )
 from ogoh.config import get_settings
-from ogoh.db.models import Feedback, Item, ItemEnrichment, Source, User, UserKeyword, UserTopic
+from ogoh.db.models import (
+    AdminLoginCode,
+    Feedback,
+    Item,
+    ItemEnrichment,
+    Source,
+    User,
+    UserKeyword,
+    UserTopic,
+)
 from ogoh.db.session import session_scope
 from ogoh.pipeline.digest import as_utc, render_telegram
 from ogoh.pipeline.match import pending_for_user
@@ -548,6 +558,41 @@ async def handle_stats(message: Message) -> None:
         f"LLM: <b>{_provider_label(get_settings())}</b>"
     )
     await message.answer(text)
+
+
+_ADMIN_CODE_TTL_MINUTES = 10
+
+
+@router.message(Command("admin"))
+async def handle_admin(message: Message) -> None:
+    """Issue a one-time code for the web panel — only to the configured admin.
+
+    Anyone else gets a flat refusal, not a hint that the command exists.
+    """
+    if message.from_user is None:
+        return
+    settings = get_settings()
+    if not settings.admin_telegram_id or message.from_user.id != settings.admin_telegram_id:
+        await message.answer("Bu buyruq sen uchun emas.")
+        return
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    expires = datetime.now(UTC) + timedelta(minutes=_ADMIN_CODE_TTL_MINUTES)
+    with session_scope() as session:
+        # One live code at a time — a new request invalidates the last.
+        for old in session.scalars(
+            select(AdminLoginCode).where(AdminLoginCode.telegram_id == settings.admin_telegram_id)
+        ).all():
+            session.delete(old)
+        session.flush()
+        session.add(
+            AdminLoginCode(code=code, telegram_id=settings.admin_telegram_id, expires_at=expires)
+        )
+
+    await message.answer(
+        f"Admin panel kirish kodi: <code>{code}</code>\n"
+        f"{_ADMIN_CODE_TTL_MINUTES} daqiqa amal qiladi."
+    )
 
 
 @router.message(Command("pause"))

@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     # window and can no longer be shown or re-summarised. 0 disables pruning.
     raw_text_retention_days: int = 90
 
+    # Admin panel. Only this Telegram id may log in — they run /admin in the bot
+    # to get a one-time code and enter it in the panel. 0 means no admin is set
+    # and the panel refuses every login. The session secret signs the login
+    # cookie; leave it blank and it is derived from the bot token at startup.
+    admin_telegram_id: int = 0
+    admin_session_secret: str = ""
+    admin_host: str = "127.0.0.1"
+    admin_port: int = 8000
+
 
 @lru_cache
 def get_settings() -> Settings:

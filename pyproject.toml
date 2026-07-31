@@ -14,6 +14,10 @@ dependencies = [
     "apscheduler>=3.11.3",
     "alembic>=1.18.5",
     "trafilatura>=2.1.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "python-multipart>=0.0.18",
+    "itsdangerous>=2.2",
 ]
 
 [build-system]
@@ -26,6 +30,7 @@ packages = ["src/ogoh"]
 [project.scripts]
 ogoh = "ogoh.cli:main"
 ogoh-bot = "ogoh.bot.main:run"
+ogoh-admin = "ogoh.admin.main:run"
 
 [tool.ruff]
 line-length = 100

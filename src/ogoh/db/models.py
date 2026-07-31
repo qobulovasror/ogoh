@@ -199,6 +199,22 @@ class ClusterResearch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class AdminLoginCode(Base):
+    """A one-time code that logs the admin into the web panel.
+
+    The bot process issues it (only to the configured admin id) and the admin
+    process verifies it — two processes, so the handoff has to go through the
+    shared database rather than memory. Short-lived and single-use: verifying a
+    code deletes it, and an expired one is refused.
+    """
+
+    __tablename__ = "admin_login_codes"
+
+    code: Mapped[str] = mapped_column(String(12), primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Feedback(Base):
     """What a reader thought of a story.
 
