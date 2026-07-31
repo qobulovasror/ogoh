@@ -24,6 +24,11 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///ogoh.db"
 
+    # Optional Redis for the bot's FSM (the /ask conversation state). Blank keeps
+    # the in-memory store, which is fine at this size but drops open conversations
+    # on restart. Set it to survive restarts; the redis package must be installed.
+    redis_url: str = ""
+
     enrich_batch_size: int = 20
     min_importance: int = 5
     digest_limit: int = 10

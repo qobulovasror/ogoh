@@ -12,18 +12,39 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.base import BaseStorage
+from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from ogoh import logsetup
 from ogoh.bot.agent_handlers import agent_router
 from ogoh.bot.handlers import router
-from ogoh.config import get_settings
+from ogoh.config import Settings, get_settings
 from ogoh.db.session import init_db
 from ogoh.worker import deliver_due_digests, run_pipeline
 
 log = logging.getLogger("ogoh.bot")
 
 _INTERVAL_MINUTES = 20
+
+
+def build_storage(settings: Settings) -> BaseStorage:
+    """Redis when configured and importable, memory otherwise.
+
+    Opt-in and defensive: a missing redis package or an unreachable URL falls
+    back to memory with a logged error rather than refusing to start the bot.
+    """
+    if not settings.redis_url:
+        return MemoryStorage()
+    try:
+        from aiogram.fsm.storage.redis import RedisStorage
+
+        storage = RedisStorage.from_url(settings.redis_url)
+        log.info("FSM storage: Redis")
+        return storage
+    except Exception:
+        log.exception("Redis FSM storage unavailable — falling back to memory")
+        return MemoryStorage()
 
 
 async def _tick(bot: Bot) -> None:
@@ -60,9 +81,10 @@ async def _run() -> int:
         settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    # Default MemoryStorage backs the agent FSM — fine at this size; a restart
-    # just drops any open /ask conversation, which is recoverable by asking again.
-    dispatcher = Dispatcher()
+    # Memory by default, Redis if REDIS_URL is set — the latter keeps an open
+    # /ask conversation alive across a restart. Either way a dropped one is
+    # recoverable by asking again.
+    dispatcher = Dispatcher(storage=build_storage(settings))
     dispatcher.include_router(router)
     dispatcher.include_router(agent_router)
 
