@@ -24,6 +24,7 @@ from ogoh.pipeline.extract import extract_pending
 from ogoh.pipeline.ingest import ingest_all
 from ogoh.pipeline.match import is_due, pending_for_user
 from ogoh.pipeline.research import research_top_stories
+from ogoh.pipeline.retention import prune_raw_text
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class PipelineStats:
     extracted: int = 0
     enriched: int = 0
     researched: int = 0
+    pruned: int = 0
 
 
 def _build_provider(settings) -> LLMProvider | None:
@@ -101,6 +103,10 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
                 extracted.improved,
                 extracted.failed,
             )
+
+        # Runs regardless of the LLM: it drops old text, not anything the model
+        # produces, so it must not be stranded behind the no-provider early return.
+        stats.pruned = prune_raw_text(session, settings.raw_text_retention_days)
 
         if provider is None:
             if not skip_llm:

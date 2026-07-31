@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # runaway guard rather than a real budget.
     research_per_run: int = 1
 
+    # How long to keep the full article text after fetching it. The summary,
+    # tags, entities and every other bit of metadata are kept forever — this
+    # drops only raw_text, the bulky field, once an item is far past every digest
+    # window and can no longer be shown or re-summarised. 0 disables pruning.
+    raw_text_retention_days: int = 90
+
 
 @lru_cache
 def get_settings() -> Settings:
