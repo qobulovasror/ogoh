@@ -39,7 +39,8 @@ from ogoh.bot.keyboards import (
     topics_keyboard,
     tz_keyboard,
 )
-from ogoh.db.models import Feedback, Item, Source, User, UserKeyword, UserTopic
+from ogoh.config import get_settings
+from ogoh.db.models import Feedback, Item, ItemEnrichment, Source, User, UserKeyword, UserTopic
 from ogoh.db.session import session_scope
 from ogoh.pipeline.digest import as_utc, render_telegram
 from ogoh.pipeline.match import pending_for_user
@@ -476,6 +477,77 @@ async def handle_sources(message: Message) -> None:
             f"{mark} {escape(source.name)} — <b>{count}</b> ta · {_ago(source.last_fetched_at, now)}"
         )
     await message.answer("\n".join(lines))
+
+
+def _provider_label(settings) -> str:
+    parts = []
+    if settings.gemini_api_key:
+        parts.append("gemini")
+    if settings.groq_api_key:
+        parts.append("groq")
+    return " + ".join(parts) or "yo'q"
+
+
+@router.message(Command("stats"))
+async def handle_stats(message: Message) -> None:
+    """Aggregate health at a glance — how many subscribers, how much news is
+    flowing, which feeds are quiet. Aggregates only, no per-person data."""
+    if message.from_user is None:
+        return
+    now = datetime.now(UTC)
+    day_ago = now - timedelta(hours=24)
+    week_ago = now - timedelta(days=_SOURCE_HEALTH_DAYS)
+
+    with session_scope() as session:
+        _get_or_create(session, message.from_user.id, message.from_user.username)
+
+        users = session.scalar(select(func.count()).select_from(User)) or 0
+        active = (
+            session.scalar(select(func.count()).select_from(User).where(User.is_active.is_(True)))
+            or 0
+        )
+        sources = (
+            session.scalar(
+                select(func.count()).select_from(Source).where(Source.enabled.is_(True))
+            )
+            or 0
+        )
+        # Enabled feeds with nothing in the last week — the silent-death count.
+        fed_recently = select(Item.source_id).where(Item.fetched_at >= week_ago).distinct()
+        quiet = (
+            session.scalar(
+                select(func.count())
+                .select_from(Source)
+                .where(Source.enabled.is_(True))
+                .where(Source.id.not_in(fed_recently))
+            )
+            or 0
+        )
+        items_total = session.scalar(select(func.count()).select_from(Item)) or 0
+        items_day = (
+            session.scalar(select(func.count()).select_from(Item).where(Item.fetched_at >= day_ago))
+            or 0
+        )
+        enriched_day = (
+            session.scalar(
+                select(func.count())
+                .select_from(ItemEnrichment)
+                .where(ItemEnrichment.enriched_at >= day_ago)
+            )
+            or 0
+        )
+
+    text = (
+        "<b>📊 Holat</b>\n\n"
+        f"Obunachilar: <b>{users}</b> ({active} faol)\n"
+        f"Manbalar: <b>{sources}</b> ta"
+        + (f" · <b>{quiet}</b> jim ⚠️" if quiet else "")
+        + "\n"
+        f"Yangiliklar: 24 soatda <b>{items_day}</b> (jami {items_total})\n"
+        f"Baholangan: 24 soatda <b>{enriched_day}</b>\n"
+        f"LLM: <b>{_provider_label(get_settings())}</b>"
+    )
+    await message.answer(text)
 
 
 @router.message(Command("pause"))

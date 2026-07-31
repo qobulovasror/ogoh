@@ -240,6 +240,19 @@ async def test_sources_lists_live_and_flags_quiet_feeds(session, make_source, ma
     assert "⚠️" in reply  # the quiet one is flagged
 
 
+async def test_stats_counts_users_and_news(session, make_item, make_enrichment):
+    make_enrichment(make_item("A story"), importance=7)
+    session.commit()
+    await handlers.handle_start(StubMessage())
+
+    message = StubMessage()
+    await handlers.handle_stats(message)
+
+    reply = message.replies[0]
+    assert "Obunachilar" in reply
+    assert "Yangiliklar" in reply
+
+
 async def test_pause_stops_the_digest_but_keeps_the_account(session):
     await handlers.handle_start(StubMessage())
 
