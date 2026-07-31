@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     # allowance in days without them.
     tavily_api_key: str = ""
     agent_model: str = "gemini-3.1-flash-lite"
+    # The stronger model the agent escalates to on a hard or stuck turn. Blank, or
+    # equal to agent_model, means no escalation — the light model handles it all.
+    agent_model_heavy: str = "gemini-3.5-flash"
     search_max_results: int = 5
     # Per user, per day. The main guard on a shared free-tier quota.
     agent_daily_budget: int = 10

@@ -132,6 +132,39 @@ def test_fetch_limit_is_respected(session, monkeypatch):
     assert len(calls) == 2
 
 
+def test_escalate_switches_to_the_heavy_brain(session):
+    light = FakeBrain([AgentAction("escalate", "")])
+    heavy = FakeBrain([AgentAction("final_answer", "kuchli javob", [])])
+
+    reply = run_turn(session, light, None, "murakkab savol", [], _settings(), heavy_brain=heavy)
+
+    assert reply.text == "kuchli javob"
+    assert heavy.calls == 1
+
+
+def test_escalate_without_a_heavy_brain_continues_on_the_light_one(session):
+    light = FakeBrain(
+        [AgentAction("escalate", ""), AgentAction("final_answer", "light javob", [])]
+    )
+
+    reply = run_turn(session, light, None, "q", [], _settings(), heavy_brain=None)
+
+    assert reply.text == "light javob"
+    assert light.calls == 2
+
+
+def test_the_forced_final_answer_uses_the_heavy_brain(session):
+    light = FakeBrain([AgentAction("search_corpus", "x") for _ in range(5)])
+    heavy = FakeBrain([AgentAction("final_answer", "heavy forced", [])])
+
+    reply = run_turn(
+        session, light, None, "q", [], _settings(agent_max_tool_calls=5), heavy_brain=heavy
+    )
+
+    assert reply.text == "heavy forced"
+    assert heavy.calls == 1
+
+
 def test_observations_are_capped(session, monkeypatch):
     from ogoh.agent import runner
 

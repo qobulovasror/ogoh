@@ -34,6 +34,8 @@ web for anything about AI models, labs, APIs, tools or research.
 cover, or any general question.
   fetch_page     — read one URL's full text, when a search snippet is not enough. \
 Use sparingly; the snippet usually suffices.
+  escalate       — hand the question to a stronger model when it is genuinely \
+hard or you are stuck. Do not use it for routine questions.
   ask_user       — ask a short clarifying question when the request is ambiguous. \
 Prefer this over guessing.
   final_answer   — give the answer, with source URLs when you used any.
@@ -56,6 +58,7 @@ def run_turn(
     user_message: str,
     transcript: list[Turn],
     settings: Settings,
+    heavy_brain: AgentBrain | None = None,
 ) -> AgentReply:
     """Advance the conversation by one user message. Mutates `transcript` in place."""
     cap = settings.agent_obs_char_cap
@@ -63,9 +66,11 @@ def run_turn(
     transcript.append(Turn("user", user_message))
     web_searches = 0
     fetches = 0
+    active = brain
+    escalated = False
 
     for _ in range(settings.agent_max_tool_calls):
-        action = brain.agent_step(SYSTEM, _render(transcript, window))
+        action = active.agent_step(SYSTEM, _render(transcript, window))
 
         if action.action == "final_answer":
             transcript.append(Turn("assistant", action.text))
@@ -74,6 +79,18 @@ def run_turn(
         if action.action == "ask_user":
             transcript.append(Turn("assistant", f"[question] {action.text}"))
             return AgentReply("question", action.text)
+
+        if action.action == "escalate":
+            # Move to the stronger model for the rest of this turn, once. Without
+            # one configured, or after already escalating, this is a no-op step
+            # rather than a way to loop forever between the two.
+            if heavy_brain is not None and not escalated:
+                active = heavy_brain
+                escalated = True
+                transcript.append(Turn("tool", "[escalated to a stronger model]"))
+            else:
+                transcript.append(Turn("tool", "[escalate unavailable — continue]"))
+            continue
 
         if action.action == "search_corpus":
             hits = search_corpus(session, action.text)
@@ -104,7 +121,10 @@ def run_turn(
         transcript.append(Turn("tool", f"[error] unknown action {action.action!r}"))
 
     # Cap hit — one forced answer from what we have, rather than another tool call.
-    action = brain.agent_step(_FORCE, _render(transcript, window))
+    # The stronger model writes it when available; the final synthesis is where the
+    # extra capability pays off.
+    forcer = heavy_brain or active
+    action = forcer.agent_step(_FORCE, _render(transcript, window))
     text = action.text or "Yetarli ma'lumot topa olmadim."
     transcript.append(Turn("assistant", text))
     return AgentReply("answer", text, action.sources)

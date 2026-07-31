@@ -7,7 +7,7 @@ result back. Keeping the action flat and small keeps each step's output cheap.
 from dataclasses import dataclass, field
 from typing import Protocol
 
-ACTIONS = ("search_corpus", "web_search", "fetch_page", "ask_user", "final_answer")
+ACTIONS = ("search_corpus", "web_search", "fetch_page", "escalate", "ask_user", "final_answer")
 
 
 @dataclass(slots=True)

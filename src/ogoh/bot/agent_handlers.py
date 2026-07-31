@@ -111,8 +111,13 @@ def _process(
                 return "answer", "Bugungi limit tugadi. Ertaga qayta urin.", [], [], False
 
         brain = GeminiProvider(api_key=settings.gemini_api_key, model=settings.agent_model)
+        heavy = None
+        if settings.agent_model_heavy and settings.agent_model_heavy != settings.agent_model:
+            heavy = GeminiProvider(api_key=settings.gemini_api_key, model=settings.agent_model_heavy)
         search = build_search_provider(settings)
-        reply = run_turn(session, brain, search, user_message, transcript, settings)
+        reply = run_turn(
+            session, brain, search, user_message, transcript, settings, heavy_brain=heavy
+        )
 
         if is_fresh:
             budget.spend(session, user.id)
