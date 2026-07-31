@@ -111,6 +111,27 @@ def test_process_refuses_when_the_budget_is_spent(session, monkeypatch):
     assert "limit tugadi" in text
 
 
+class BoomBrain:
+    model = "fake"
+
+    def agent_step(self, system, transcript):
+        raise RuntimeError("gemini 429")
+
+
+def test_process_survives_an_llm_failure_without_charging(session, monkeypatch):
+    _register()
+    user = _enable_agent(session)
+    _patch(monkeypatch, BoomBrain())
+
+    kind, text, _sources, _transcript, _awaiting = _process(user.telegram_id, "savol", [], True)
+
+    assert kind == "answer"
+    assert "javob berolmadim" in text
+    session.expire_all()
+    # A failed question is not billed.
+    assert session.scalar(select(AgentUsage).where(AgentUsage.user_id == user.id)) is None
+
+
 def test_process_serves_a_cache_hit_without_spending(session, monkeypatch):
     _register()
     user = _enable_agent(session)

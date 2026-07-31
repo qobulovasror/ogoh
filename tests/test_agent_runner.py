@@ -165,6 +165,22 @@ def test_the_forced_final_answer_uses_the_heavy_brain(session):
     assert heavy.calls == 1
 
 
+def test_a_failing_web_search_does_not_sink_the_turn(session):
+    class Boom:
+        def search(self, query):
+            raise RuntimeError("tavily down")
+
+    brain = FakeBrain(
+        [AgentAction("web_search", "q"), AgentAction("final_answer", "korpusdan javob", [])]
+    )
+
+    reply = run_turn(session, brain, Boom(), "q", [], _settings())
+
+    assert reply.kind == "answer"
+    assert reply.text == "korpusdan javob"
+    assert "error" in brain.last_transcript  # the failure became an observation
+
+
 def test_observations_are_capped(session, monkeypatch):
     from ogoh.agent import runner
 

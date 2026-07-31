@@ -93,8 +93,8 @@ def run_turn(
             continue
 
         if action.action == "search_corpus":
-            hits = search_corpus(session, action.text)
-            transcript.append(Turn("tool", _cap(f"[corpus: {action.text}]\n{_format_corpus(hits)}", cap)))
+            hits = _safe(lambda q=action.text: _format_corpus(search_corpus(session, q)), "corpus")
+            transcript.append(Turn("tool", _cap(f"[corpus: {action.text}]\n{hits}", cap)))
             continue
 
         if action.action == "web_search":
@@ -104,8 +104,10 @@ def run_turn(
                 transcript.append(Turn("tool", "[web] search limit reached for this question"))
             else:
                 web_searches += 1
-                observation = f"[web: {action.text}]\n{_format_web(search.search(action.text))}"
-                transcript.append(Turn("tool", _cap(observation, cap)))
+                # A flaky search must not sink the whole turn — the model can fall
+                # back to the corpus or answer from what it has.
+                body = _safe(lambda q=action.text: _format_web(search.search(q)), "web")
+                transcript.append(Turn("tool", _cap(f"[web: {action.text}]\n{body}", cap)))
             continue
 
         if action.action == "fetch_page":
@@ -128,6 +130,15 @@ def run_turn(
     text = action.text or "Yetarli ma'lumot topa olmadim."
     transcript.append(Turn("assistant", text))
     return AgentReply("answer", text, action.sources)
+
+
+def _safe(call, label: str) -> str:
+    """Run a tool, turning any failure into an observation the loop can continue past."""
+    try:
+        return call()
+    except Exception as exc:
+        log.warning("agent tool %s failed: %s", label, type(exc).__name__)
+        return f"[{label} error — could not complete this step]"
 
 
 def _render(transcript: list[Turn], window: int) -> str:

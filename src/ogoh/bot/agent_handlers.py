@@ -21,7 +21,7 @@ from sqlalchemy import select
 from ogoh.agent import audit, budget, cache
 from ogoh.agent.runner import run_turn
 from ogoh.agent.search import build_search_provider
-from ogoh.agent.types import Turn
+from ogoh.agent.types import AgentReply, Turn
 from ogoh.bot.handlers import _get_or_create
 from ogoh.config import get_settings
 from ogoh.db.models import User
@@ -118,11 +118,20 @@ def _process(
         if settings.agent_model_heavy and settings.agent_model_heavy != settings.agent_model:
             heavy = GeminiProvider(api_key=settings.gemini_api_key, model=settings.agent_model_heavy)
         search = build_search_provider(settings)
-        reply = run_turn(
-            session, brain, search, user_message, transcript, settings, heavy_brain=heavy
-        )
+        try:
+            reply = run_turn(
+                session, brain, search, user_message, transcript, settings, heavy_brain=heavy
+            )
+            failed = False
+        except Exception:
+            # The model call itself fell over (429, timeout, bad response). Do not
+            # charge for a question we could not answer, and never let it surface
+            # as an unhandled error in the message handler.
+            log.exception("agent run failed for user %d", user.id)
+            reply = AgentReply("answer", "Kechirasan, hozir javob berolmadim. Birozdan keyin urin.")
+            failed = True
 
-        if is_fresh:
+        if is_fresh and not failed:
             budget.spend(session, user.id)
             if reply.kind == "answer":
                 cache.put_cached(session, user_message, reply.text)
