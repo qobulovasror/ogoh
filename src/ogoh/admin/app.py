@@ -20,6 +20,8 @@ from ogoh.admin import html
 from ogoh.admin.auth import SESSION_KEY, session_secret, verify_code
 from ogoh.config import Settings, get_settings
 from ogoh.db.models import (
+    AgentQueryCache,
+    AgentUsage,
     Feedback,
     Item,
     ItemEnrichment,
@@ -329,6 +331,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # next run (or the Run button) scores it again from current text.
                 session.delete(enr)
         return RedirectResponse(f"/items/{item_id}?msg=" + _q("Qayta baholashga qo'yildi"), status_code=303)
+
+    # ---- agent ---------------------------------------------------------------
+
+    @app.get("/agent", response_class=HTMLResponse)
+    async def agent_stats(request: Request) -> HTMLResponse:
+        if guard := _guarded(request):
+            return guard
+        today = datetime.now(UTC).date()
+        with session_scope() as session:
+            enabled = list(
+                session.scalars(
+                    select(User).where(User.agent_enabled.is_(True)).order_by(User.username)
+                )
+            )
+            today_total = session.scalar(
+                select(func.coalesce(func.sum(AgentUsage.count), 0)).where(AgentUsage.day == today)
+            ) or 0
+            all_total = session.scalar(
+                select(func.coalesce(func.sum(AgentUsage.count), 0))
+            ) or 0
+            cached = session.scalar(select(func.count()).select_from(AgentQueryCache)) or 0
+            per_user = []
+            for user in enabled:
+                row = session.get(AgentUsage, (user.id, today))
+                per_user.append(
+                    [
+                        f"<a href='/users/{user.id}'>{escape(user.username or str(user.telegram_id))}</a>",
+                        str(row.count if row else 0),
+                        str(settings.agent_daily_budget),
+                    ]
+                )
+
+        cfg = get_settings()
+        cards = (
+            f"<div class='card'><div class='stat'>{len(enabled)}<br><small>agent yoqilgan</small></div></div>"
+            f"<div class='card'><div class='stat'>{today_total}<br><small>bugungi savol</small></div></div>"
+            f"<div class='card'><div class='stat'>{all_total}<br><small>jami savol</small></div></div>"
+            f"<div class='card'><div class='stat'>{cached}<br><small>keshdagi javob</small></div></div>"
+        )
+        conf = (
+            "<div class='card'><h2>Sozlama</h2>"
+            f"Model: <b>{escape(cfg.agent_model)}</b><br>"
+            f"Kunlik budjet: <b>{cfg.agent_daily_budget}</b><br>"
+            f"Chegaralar: {cfg.agent_max_tool_calls} tool · {cfg.agent_max_web_searches} web · "
+            f"{cfg.agent_max_fetches} fetch<br>"
+            f"Web qidiruv: <b>{'Tavily' if cfg.tavily_api_key else 'sozlanmagan'}</b></div>"
+        )
+        body = (
+            "<h1>Agent</h1>"
+            f"<div class='grid'>{cards}</div>{conf}"
+            "<h2>Yoqilgan foydalanuvchilar</h2>"
+            + html.table(["User", "Bugun", "Budjet"], per_user)
+            + "<p class='muted'>Suhbat tarixi (transcript) hozircha saqlanmaydi — P2.</p>"
+        )
+        return HTMLResponse(html.page("Agent", body, active="/agent"))
 
     # ---- users ---------------------------------------------------------------
 

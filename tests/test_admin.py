@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from ogoh.admin.app import create_app
 from ogoh.config import Settings
-from ogoh.db.models import AdminLoginCode, Source, User, UserKeyword, UserTopic
+from ogoh.db.models import AdminLoginCode, AgentUsage, Source, User, UserKeyword, UserTopic
 
 ADMIN_ID = 42
 
@@ -163,6 +163,22 @@ def test_admin_can_enable_the_agent_for_a_user(client, session, make_user):
 
     session.expire_all()
     assert session.get(User, user.id).agent_enabled is True
+
+
+def test_the_agent_page_shows_usage(client, session, make_user):
+    from datetime import UTC, datetime
+
+    _login(client, session)
+    user = make_user()
+    user.agent_enabled = True
+    session.add(AgentUsage(user_id=user.id, day=datetime.now(UTC).date(), count=4))
+    session.commit()
+
+    resp = client.get("/agent")
+
+    assert resp.status_code == 200
+    assert "bugungi savol" in resp.text
+    assert (user.username or "") in resp.text
 
 
 def test_the_items_browser_lists_a_stored_item(client, session, make_item, make_enrichment):

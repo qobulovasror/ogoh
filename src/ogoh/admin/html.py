@@ -56,6 +56,7 @@ _NAV = (
     ("/sources", "Manbalar"),
     ("/items", "Yangiliklar"),
     ("/users", "Foydalanuvchilar"),
+    ("/agent", "Agent"),
 )
 
 
