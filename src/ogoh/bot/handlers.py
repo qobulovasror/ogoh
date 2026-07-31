@@ -8,13 +8,13 @@ pipeline is the opposite kind of work and runs in a thread — see worker.py.
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import escape
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ogoh.bot.keyboards import (
@@ -39,9 +39,9 @@ from ogoh.bot.keyboards import (
     topics_keyboard,
     tz_keyboard,
 )
-from ogoh.db.models import Feedback, User, UserKeyword, UserTopic
+from ogoh.db.models import Feedback, Item, Source, User, UserKeyword, UserTopic
 from ogoh.db.session import session_scope
-from ogoh.pipeline.digest import render_telegram
+from ogoh.pipeline.digest import as_utc, render_telegram
 from ogoh.pipeline.match import pending_for_user
 from ogoh.taxonomy import LABELS_UZ, TAG_KEYS
 
@@ -424,6 +424,58 @@ async def handle_settings(message: Message) -> None:
             f"Kalit so'zlar: <b>{keywords_shown}</b>  /keywords"
         )
     await message.answer(text)
+
+
+# A feed we fetched but that returned nothing for a week is the silent failure
+# the plan warns about — DeepMind's rss.xml parses fine and is permanently empty.
+# This window is what tells a live-but-quiet source from a dead one.
+_SOURCE_HEALTH_DAYS = 7
+
+
+def _ago(when: datetime | None, now: datetime) -> str:
+    if when is None:
+        return "hech qachon"
+    seconds = (now - as_utc(when)).total_seconds()
+    if seconds < 3600:
+        return f"{int(seconds // 60)} daq oldin"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} soat oldin"
+    return f"{int(seconds // 86400)} kun oldin"
+
+
+@router.message(Command("sources"))
+async def handle_sources(message: Message) -> None:
+    """Which feeds are alive. A source with zero items in a week is flagged.
+
+    Read-only and cheap; useful to anyone, but the real audience is whoever runs
+    the bot and needs to notice a feed that has quietly stopped returning news.
+    """
+    if message.from_user is None:
+        return
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=_SOURCE_HEALTH_DAYS)
+
+    with session_scope() as session:
+        _get_or_create(session, message.from_user.id, message.from_user.username)
+        rows = session.execute(
+            select(Source, func.count(Item.id))
+            .outerjoin(Item, (Item.source_id == Source.id) & (Item.fetched_at >= cutoff))
+            .where(Source.enabled.is_(True))
+            .group_by(Source.id)
+            .order_by(Source.trust_tier, Source.name)
+        ).all()
+
+    if not rows:
+        await message.answer("Hali manba yo'q.")
+        return
+
+    lines = [f"<b>Manbalar</b> (oxirgi {_SOURCE_HEALTH_DAYS} kun)\n"]
+    for source, count in rows:
+        mark = "✅" if count else "⚠️"
+        lines.append(
+            f"{mark} {escape(source.name)} — <b>{count}</b> ta · {_ago(source.last_fetched_at, now)}"
+        )
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("pause"))

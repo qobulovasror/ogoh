@@ -225,6 +225,21 @@ async def test_settings_reflects_the_current_choices(session):
     assert "Europe/Moscow" in message.replies[0]
 
 
+async def test_sources_lists_live_and_flags_quiet_feeds(session, make_source, make_item):
+    live = make_source("Live Feed")
+    make_item("Recent story", source=live, age_hours=2)
+    make_source("Quiet Feed")  # fetched, but no items
+    session.commit()
+    await handlers.handle_start(StubMessage())
+
+    message = StubMessage()
+    await handlers.handle_sources(message)
+
+    reply = message.replies[0]
+    assert "Live Feed" in reply and "Quiet Feed" in reply
+    assert "⚠️" in reply  # the quiet one is flagged
+
+
 async def test_pause_stops_the_digest_but_keeps_the_account(session):
     await handlers.handle_start(StubMessage())
 
