@@ -27,6 +27,7 @@ from ogoh.config import get_settings
 from ogoh.db.models import User
 from ogoh.db.session import session_scope
 from ogoh.llm.gemini import GeminiProvider
+from ogoh.llm.rotating import RotatingProvider, split_keys
 
 log = logging.getLogger(__name__)
 
@@ -113,10 +114,11 @@ def _process(
                 audit.log_exchange(session, user.id, user_message, limit_msg)
                 return "answer", limit_msg, [], [], False
 
-        brain = GeminiProvider(api_key=settings.gemini_api_key, model=settings.agent_model)
+        keys = split_keys(settings.gemini_api_key)
+        brain = _build_brain(keys, settings.agent_model)
         heavy = None
         if settings.agent_model_heavy and settings.agent_model_heavy != settings.agent_model:
-            heavy = GeminiProvider(api_key=settings.gemini_api_key, model=settings.agent_model_heavy)
+            heavy = _build_brain(keys, settings.agent_model_heavy)
         search = build_search_provider(settings)
         try:
             reply = run_turn(
@@ -140,6 +142,16 @@ def _process(
     awaiting = reply.kind == "question"
     kept = [{"role": t.role, "content": t.content} for t in transcript] if awaiting else []
     return reply.kind, reply.text, reply.sources, kept, awaiting
+
+
+def _build_brain(keys: list[str], model: str):
+    """One GeminiProvider per key, rotated when there is more than one.
+
+    Constructs GeminiProvider by name so the tests' monkeypatch still intercepts
+    the single-key path.
+    """
+    providers = [GeminiProvider(api_key=key, model=model) for key in keys]
+    return providers[0] if len(providers) == 1 else RotatingProvider(providers)
 
 
 def _render(text: str, sources: list[str]) -> str:

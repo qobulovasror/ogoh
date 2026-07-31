@@ -17,6 +17,7 @@ from ogoh.llm.base import LLMProvider
 from ogoh.llm.fallback import FallbackProvider
 from ogoh.llm.gemini import GeminiProvider
 from ogoh.llm.groq import GroqProvider
+from ogoh.llm.rotating import RotatingProvider, split_keys
 from ogoh.pipeline.dedupe import assign_clusters
 from ogoh.pipeline.digest import render_telegram
 from ogoh.pipeline.enrich import enrich_pending
@@ -47,13 +48,16 @@ class PipelineStats:
 def _build_provider(settings) -> LLMProvider | None:
     """Gemini first, Groq behind it — whichever keys are set.
 
-    Both keys: a FallbackProvider that tries Gemini and drops to Groq on failure.
-    One key: that provider alone, no wrapper. No key: None, and the caller skips
-    every LLM step and says so.
+    GEMINI_API_KEY may be several keys, comma-separated: they are rotated for
+    load-spread and failover. Then Groq sits behind the whole Gemini rotation as
+    a different-provider fallback. One key: that provider alone. No key: None, and
+    the caller skips every LLM step and says so.
     """
     providers: list[LLMProvider] = []
-    if settings.gemini_api_key:
-        providers.append(GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model))
+    gemini_keys = split_keys(settings.gemini_api_key)
+    if gemini_keys:
+        gemini = [GeminiProvider(api_key=key, model=settings.gemini_model) for key in gemini_keys]
+        providers.append(gemini[0] if len(gemini) == 1 else RotatingProvider(gemini))
     if settings.groq_api_key:
         providers.append(GroqProvider(api_key=settings.groq_api_key, model=settings.groq_model))
 
