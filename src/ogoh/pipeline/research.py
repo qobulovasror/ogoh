@@ -86,6 +86,8 @@ def research_top_stories(
                 created_at=datetime.now(UTC),
             )
         )
+        # Before the next model call, which must not run holding SQLite's write lock.
+        session.commit()
         stats.written += 1
         log.info("research: wrote up cluster %d (%s)", cluster_id, payload.headline)
 

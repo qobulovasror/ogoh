@@ -79,7 +79,8 @@ def enrich_pending(
             )
             stats.enriched += 1
 
-        session.flush()
+        # Per batch, so the next batch's model call runs without SQLite's write lock.
+        session.commit()
 
     return stats
 

@@ -38,6 +38,28 @@ def test_new_items_are_stored(session):
     assert session.scalar(select(func.count(Item.id))) == 2
 
 
+def test_a_feed_added_in_the_panel_is_fetched(session, monkeypatch):
+    # The panel stored it, but ingest only ever read the code registry.
+    from ogoh.pipeline import ingest
+
+    session.add(Source(name="Panel Feed", kind="rss", url="https://panel.test/rss", trust_tier=2))
+    session.commit()
+    fetched = []
+
+    class FakeRss(FakeSource):
+        def __init__(self, name, url, trust_tier=2):
+            super().__init__(name, [_raw(url="https://panel.test/a")], url=url)
+            fetched.append(url)
+
+    monkeypatch.setattr(ingest, "FETCHERS", ())
+    monkeypatch.setattr(ingest, "RssSource", FakeRss)
+
+    stats = ingest_all(session)
+
+    assert fetched == ["https://panel.test/rss"]
+    assert stats.new == 1
+
+
 def test_the_same_url_is_only_stored_once(session):
     source = FakeSource(items=[_raw(url="https://fake.test/a")])
 

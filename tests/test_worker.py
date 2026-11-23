@@ -5,6 +5,7 @@ KEY(user_id, cluster_id) is what holds when the process dies mid-run or two
 instances race, and these tests are what say so.
 """
 
+import sqlite3
 from datetime import UTC, datetime
 
 import pytest
@@ -209,6 +210,30 @@ async def test_each_subscriber_gets_their_own_topics(
     assert "A new model ships" in delivered[models.telegram_id]
     assert "Someone raised a round" not in delivered[models.telegram_id]
     assert "Someone raised a round" in delivered[money.telegram_id]
+
+
+async def test_a_send_never_waits_holding_the_write_lock(
+    session, make_user, make_item, make_enrichment, due_now
+):
+    # One user's deliveries were left uncommitted while the next send awaited
+    # Telegram, so any bot handler writing in that moment got "database is locked".
+    make_enrichment(make_item("A new model ships"), importance=8)
+    make_user(digest_mode="daily", digest_hour=9)
+    make_user(digest_mode="daily", digest_hour=9)
+    session.commit()
+    path = session.get_bind().url.database
+
+    class HandlerWritesDuringSend(FakeBot):
+        async def send_message(self, chat_id, text, **kwargs):
+            other = sqlite3.connect(path, timeout=0.2)
+            try:
+                other.execute("UPDATE sources SET enabled = enabled")
+                other.commit()
+            finally:
+                other.close()
+            self.sent.append((chat_id, text))
+
+    assert await deliver_due_digests(HandlerWritesDuringSend()) == 2
 
 
 async def test_inactive_users_are_skipped(

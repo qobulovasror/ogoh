@@ -6,6 +6,8 @@ matters: matching by position would attach the wrong summary to the wrong story
 and nothing would look broken.
 """
 
+import sqlite3
+
 from ogoh.db.models import ItemEnrichment
 from ogoh.llm.base import Verdict
 from ogoh.pipeline.enrich import enrich_pending
@@ -56,6 +58,28 @@ def test_items_are_batched(session, make_item):
     assert stats.batches == 3
     assert [len(batch) for batch in provider.batches] == [10, 10, 5]
     assert stats.enriched == 25
+
+
+def test_a_model_call_never_runs_holding_the_write_lock(session, make_item):
+    # The bot and the panel write to the same SQLite file. A batch left uncommitted
+    # across the next model call locked them out: "database is locked".
+    for i in range(4):
+        make_item(f"Item {i}")
+    session.commit()
+    path = session.get_bind().url.database
+
+    def write_from_another_process(items):
+        other = sqlite3.connect(path, timeout=0.2)
+        try:
+            other.execute("UPDATE sources SET enabled = enabled")
+            other.commit()
+        finally:
+            other.close()
+        return [_verdict(i.index) for i in items]
+
+    stats = enrich_pending(session, FakeProvider(write_from_another_process), batch_size=2)
+
+    assert stats.enriched == 4
 
 
 def test_already_enriched_items_are_not_redone(session, make_item, make_enrichment):

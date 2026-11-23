@@ -19,7 +19,7 @@ from ogoh.llm.gemini import GeminiProvider
 from ogoh.llm.groq import GroqProvider
 from ogoh.llm.rotating import RotatingProvider, split_keys
 from ogoh.pipeline.dedupe import assign_clusters
-from ogoh.pipeline.digest import render_telegram
+from ogoh.pipeline.digest import render_telegram_messages
 from ogoh.pipeline.enrich import enrich_pending
 from ogoh.pipeline.extract import extract_pending
 from ogoh.pipeline.ingest import ingest_all
@@ -79,8 +79,12 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
 
     provider = None if skip_llm else _build_provider(settings)
 
+    # Committed after every stage, and per batch inside the LLM stages: SQLite
+    # keeps one writer, and a transaction held open across feeds and model calls
+    # turned every bot and panel write in that window into "database is locked".
     with session_scope() as session:
         ingested = ingest_all(session)
+        session.commit()
         stats.new_items = ingested.new
         log.info("ingest: %d new, %d already seen", ingested.new, ingested.duplicate)
         if ingested.failed_sources:
@@ -89,6 +93,7 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
             log.warning("sources that returned nothing: %s", ", ".join(ingested.empty_sources))
 
         deduped = assign_clusters(session, provider)
+        session.commit()
         stats.stories = deduped.clustered
         log.info(
             "dedupe: %d stories, %d folded in (%d judged, %d of those merged)",
@@ -99,6 +104,7 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
         )
 
         extracted = extract_pending(session)
+        session.commit()
         stats.extracted = extracted.improved
         if extracted.attempted:
             log.info(
@@ -114,6 +120,7 @@ def run_pipeline(*, enrich_limit: int | None = None, skip_llm: bool = False) -> 
         prune_agent_data(
             session, settings.agent_message_retention_days, settings.agent_cache_ttl_hours
         )
+        session.commit()
 
         if provider is None:
             if not skip_llm:
@@ -158,35 +165,40 @@ async def deliver_due_digests(bot: Bot) -> int:
             if not entries:
                 continue
 
-            if not await _send(bot, session, user, entries):
-                continue
-
-            # Recorded only once the send has landed. The other order drops a
-            # digest on the floor every time Telegram hiccups; this one at worst
-            # repeats one, and a repeat is the cheaper mistake.
-            for entry in entries:
-                session.add(
-                    Delivery(
-                        user_id=user.id,
-                        cluster_id=entry.item.cluster_id or entry.item.id,
-                        sent_at=now,
+            delivered = await _send(bot, session, user, entries)
+            if delivered:
+                # Recorded only once the send has landed. The other order drops a
+                # digest on the floor every time Telegram hiccups; this one at worst
+                # repeats one, and a repeat is the cheaper mistake.
+                for entry in entries:
+                    session.add(
+                        Delivery(
+                            user_id=user.id,
+                            cluster_id=entry.item.cluster_id or entry.item.id,
+                            sent_at=now,
+                        )
                     )
-                )
-            user.last_digest_at = now
-            sent += 1
-            await asyncio.sleep(_SEND_GAP_SECONDS)
+                user.last_digest_at = now
+                sent += 1
+            # Per person, so no write stays open across the next send's network wait.
+            session.commit()
+            if delivered:
+                await asyncio.sleep(_SEND_GAP_SECONDS)
 
     return sent
 
 
 async def _send(bot: Bot, session, user: User, entries: list) -> bool:
+    messages = render_telegram_messages(entries, lang=user.lang)
     try:
-        await bot.send_message(
-            user.telegram_id,
-            render_telegram(entries, lang=user.lang),
-            reply_markup=feedback_keyboard(entries),
-            link_preview_options={"is_disabled": True},
-        )
+        for position, text in enumerate(messages, start=1):
+            await bot.send_message(
+                user.telegram_id,
+                text,
+                # The numbered vote buttons go under the last part, after every story.
+                reply_markup=feedback_keyboard(entries) if position == len(messages) else None,
+                link_preview_options={"is_disabled": True},
+            )
         return True
     except TelegramForbiddenError:
         # They blocked the bot or deleted the chat. Telegram will reject every

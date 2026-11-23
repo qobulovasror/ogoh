@@ -272,7 +272,19 @@ async def test_stop_deactivates(session):
     session.expire_all()
     stored = session.scalar(select(User).where(User.telegram_id == 42))
     assert stored.is_active is False
-    assert stored.digest_mode == "off"
+
+
+async def test_start_after_stop_resumes_the_old_settings(session):
+    # /stop promises "/start bilan o'sha yerdan davom etasan"; it used to set the
+    # mode to off, so a returning reader was active and silently got nothing.
+    await handlers.handle_start(StubMessage())
+    await handlers.handle_stop(StubMessage())
+    await handlers.handle_start(StubMessage())
+
+    session.expire_all()
+    stored = session.scalar(select(User).where(User.telegram_id == 42))
+    assert stored.is_active is True
+    assert stored.digest_mode == "daily"
 
 
 async def test_preview_shows_what_is_waiting(session, make_item, make_enrichment):
