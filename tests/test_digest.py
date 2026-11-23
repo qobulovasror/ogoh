@@ -1,5 +1,11 @@
 from ogoh.pipeline.dedupe import assign_clusters
-from ogoh.pipeline.digest import render_console, render_telegram, top_entries
+from ogoh.pipeline.digest import (
+    TELEGRAM_MAX_CHARS,
+    render_console,
+    render_telegram,
+    render_telegram_messages,
+    top_entries,
+)
 
 
 def test_a_story_takes_one_slot_however_many_outlets_ran_it(
@@ -124,6 +130,23 @@ def test_telegram_render_escapes_markup(session, make_item, make_enrichment):
     assert "&amp;" in html
     assert "&lt;chips&gt;" in html
     assert "<chips>" not in html
+
+
+def test_a_long_digest_is_split_between_stories_under_telegrams_limit(
+    session, make_item, make_enrichment
+):
+    # Ten real stories with two deep dives measured 4363 characters; Telegram
+    # rejects anything over 4096 outright, so the reader got no digest at all.
+    for i in range(10):
+        make_enrichment(make_item(f"Story {i} " + "word " * 90), importance=8)
+    entries = top_entries(session, min_importance=5, limit=10)
+
+    messages = render_telegram_messages(entries)
+
+    assert len(messages) > 1
+    assert all(len(m.encode("utf-16-le")) // 2 <= TELEGRAM_MAX_CHARS for m in messages)
+    # Cut only at story boundaries: put back together, it is the same digest.
+    assert "\n\n".join(messages) == render_telegram(entries)
 
 
 def test_extra_coverage_is_shown(session, make_item, make_enrichment, make_source):

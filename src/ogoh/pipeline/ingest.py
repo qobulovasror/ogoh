@@ -11,6 +11,7 @@ from ogoh.db.models import Item, Source
 from ogoh.pipeline.normalize import canonicalize_url, url_hash
 from ogoh.sources.base import RawItem, SourceFetcher
 from ogoh.sources.registry import FETCHERS
+from ogoh.sources.rss import RssSource
 
 log = logging.getLogger(__name__)
 
@@ -32,9 +33,13 @@ class IngestStats:
     empty_sources: list[str] = field(default_factory=list)
 
 
-def ingest_all(session: Session, fetchers: tuple[SourceFetcher, ...] = FETCHERS) -> IngestStats:
+def ingest_all(
+    session: Session, fetchers: tuple[SourceFetcher, ...] | None = None
+) -> IngestStats:
     stats = IngestStats()
     cutoff = datetime.now(UTC) - timedelta(days=get_settings().max_age_days)
+    if fetchers is None:
+        fetchers = (*FETCHERS, *panel_sources(session))
 
     # Sync the source rows first, on this thread: the id assigned here is what the
     # per-source uid namespace hangs off, so it has to exist before anything stores.
@@ -43,7 +48,8 @@ def ingest_all(session: Session, fetchers: tuple[SourceFetcher, ...] = FETCHERS)
         source = _upsert_source(session, fetcher)
         if source.enabled:
             active.append((source, fetcher))
-    session.flush()
+    # Commit, not flush: the fetches below must not hold SQLite's write lock.
+    session.commit()
 
     with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
         fetched = list(pool.map(_fetch_source, active))
@@ -75,6 +81,15 @@ def ingest_all(session: Session, fetchers: tuple[SourceFetcher, ...] = FETCHERS)
         session.flush()
 
     return stats
+
+
+def panel_sources(session: Session) -> list[RssSource]:
+    """RSS feeds added in the admin panel. Before this they were stored and never fetched."""
+    in_code = [fetcher.name for fetcher in FETCHERS]
+    rows = session.scalars(
+        select(Source).where(Source.kind == "rss").where(Source.name.not_in(in_code))
+    )
+    return [RssSource(row.name, row.url, trust_tier=row.trust_tier) for row in rows]
 
 
 def _fetch_source(

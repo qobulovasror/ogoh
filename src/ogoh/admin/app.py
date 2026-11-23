@@ -33,12 +33,14 @@ from ogoh.db.models import (
 )
 from ogoh.db.session import session_scope
 from ogoh.pipeline.digest import as_utc
+from ogoh.sources.registry import FETCHERS
 from ogoh.taxonomy import TAG_KEYS, TAGS
 from ogoh.worker import run_pipeline
 
 log = logging.getLogger(__name__)
 
 _DIGEST_MODES = ("instant", "daily", "weekly", "off")
+_IN_CODE = frozenset(fetcher.name for fetcher in FETCHERS)
 _LANGS = ("uz", "en")
 
 
@@ -185,8 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "<h2>Yangi manba</h2>"
             "<form method='post' action='/sources/add' class='row'>"
             "<div><label>Nomi</label><input name='name' required></div>"
-            "<div><label>URL</label><input name='url' size='40' required></div>"
-            "<div><label>Turi</label><input name='kind' value='rss' size='8'></div>"
+            "<div><label>RSS/Atom URL</label><input name='url' size='40' required></div>"
             "<div><label>Tier</label><input name='trust_tier' type='number' min='1' max='3' value='2' size='2'></div>"
             "<button>Qo'shish</button></form>"
         )
@@ -204,7 +205,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         name: str = Form(...),
         url: str = Form(...),
-        kind: str = Form("rss"),
         trust_tier: int = Form(2),
     ) -> RedirectResponse:
         if guard := _guarded(request):
@@ -217,7 +217,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 Source(
                     name=name.strip(),
                     url=url.strip(),
-                    kind=kind.strip() or "rss",
+                    # Ingest reads panel-added sources as RSS; any other kind was never fetched.
+                    kind="rss",
                     trust_tier=_clamp(trust_tier, 1, 3),
                     enabled=True,
                 )
@@ -228,8 +229,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def sources_update(
         request: Request,
         source_id: int,
-        url: str = Form(...),
-        kind: str = Form("rss"),
+        url: str = Form(""),
         trust_tier: int = Form(2),
         enabled: str = Form(""),
     ) -> RedirectResponse:
@@ -238,10 +238,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with session_scope() as session:
             source = session.get(Source, source_id)
             if source is not None:
-                source.url = url.strip()
-                source.kind = kind.strip() or "rss"
-                source.trust_tier = _clamp(trust_tier, 1, 3)
                 source.enabled = enabled == "on"
+                # A source defined in code gets its url and tier back from the
+                # registry on every run, so only on/off is the panel's to change.
+                if source.name not in _IN_CODE:
+                    source.url = url.strip() or source.url
+                    source.trust_tier = _clamp(trust_tier, 1, 3)
         return RedirectResponse("/sources?msg=" + _q("Saqlandi"), status_code=303)
 
     @app.post("/sources/{source_id}/delete")
@@ -384,7 +386,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             f"<div class='grid'>{cards}</div>{conf}"
             "<h2>Yoqilgan foydalanuvchilar</h2>"
             + html.table(["User", "Bugun", "Budjet"], per_user)
-            + "<p class='muted'>Suhbat tarixi (transcript) hozircha saqlanmaydi — P2.</p>"
+            + "<p class='muted'>Suhbat tarixi: foydalanuvchi sahifasida.</p>"
         )
         return HTMLResponse(html.page("Agent", body, active="/agent"))
 
@@ -515,11 +517,15 @@ def _fmt(when, default: str = "—") -> str:
 
 def _source_row(source: Source, count: int) -> list[str]:
     status = "✅" if source.enabled else "⏸"
+    fields = (
+        "<span class='muted'>kodda</span>"
+        if source.name in _IN_CODE
+        else f"<input name='url' value='{escape(source.url)}' size='28'>"
+        f"<input name='trust_tier' type='number' min='1' max='3' value='{source.trust_tier}' size='2'>"
+    )
     edit = (
         f"<form method='post' action='/sources/{source.id}/update' class='row' style='gap:.3rem'>"
-        f"<input name='url' value='{escape(source.url)}' size='28'>"
-        f"<input name='kind' value='{escape(source.kind)}' size='6'>"
-        f"<input name='trust_tier' type='number' min='1' max='3' value='{source.trust_tier}' size='2'>"
+        f"{fields}"
         f"<label style='display:inline;margin:0'><input type='checkbox' name='enabled'"
         f"{' checked' if source.enabled else ''}> on</label>"
         "<button class='ghost'>Saqla</button></form>"

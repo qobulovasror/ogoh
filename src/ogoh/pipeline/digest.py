@@ -104,9 +104,44 @@ def summary_for(enrichment: ItemEnrichment, lang: str) -> str:
     return enrichment.summary
 
 
+# Telegram's cap on one message's text. Measured on raw HTML, which is never
+# shorter than what Telegram counts, so a part under it is always accepted.
+TELEGRAM_MAX_CHARS = 4096
+
+
 def render_telegram(entries: Sequence[DigestEntry], lang: str = "uz") -> str:
+    return "\n\n".join(_blocks(entries, lang))
+
+
+def render_telegram_messages(
+    entries: Sequence[DigestEntry], lang: str = "uz", limit: int = TELEGRAM_MAX_CHARS
+) -> list[str]:
+    """The digest as Telegram-sized messages, split between stories, never inside one.
+
+    Ten stories with two deep dives already run past 4096 on real data, and
+    Telegram rejects the whole message rather than trimming it.
+    """
+    messages: list[str] = []
+    current = ""
+    for block in _blocks(entries, lang):
+        joined = f"{current}\n\n{block}" if current else block
+        if current and _utf16_len(joined) > limit:
+            messages.append(current)
+            current = block
+        else:
+            current = joined
+    messages.append(current)
+    return messages
+
+
+def _utf16_len(text: str) -> int:
+    # Telegram counts UTF-16 code units: an emoji is two, not one.
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _blocks(entries: Sequence[DigestEntry], lang: str) -> list[str]:
     if not entries:
-        return "Bu safar chegaradan o'tgan yangilik yo'q."
+        return ["Bu safar chegaradan o'tgan yangilik yo'q."]
 
     blocks = ["<b>AI yangiliklari</b>\n"]
     for position, entry in enumerate(entries, start=1):
@@ -125,7 +160,7 @@ def render_telegram(entries: Sequence[DigestEntry], lang: str = "uz") -> str:
             f"{_research_block(entry, lang)}"
             f"<i>{escape(meta)}</i>"
         )
-    return "\n\n".join(blocks)
+    return blocks
 
 
 def _research_block(entry: DigestEntry, lang: str) -> str:

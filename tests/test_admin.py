@@ -92,6 +92,30 @@ def test_a_source_can_be_added(client, session):
     assert stored.trust_tier == 1
 
 
+def test_a_source_defined_in_code_only_toggles(client, session):
+    # Ingest rewrites its url and tier from the registry every run, so a panel
+    # edit looked saved and was silently undone twenty minutes later.
+    from ogoh.sources.registry import FETCHERS
+
+    _login(client, session)
+    fetcher = FETCHERS[1]
+    source = Source(
+        name=fetcher.name, kind=fetcher.kind, url=fetcher.url, trust_tier=fetcher.trust_tier
+    )
+    session.add(source)
+    session.commit()
+
+    client.post(
+        f"/sources/{source.id}/update", data={"url": "https://elsewhere.test", "trust_tier": "3"}
+    )
+
+    session.expire_all()
+    stored = session.get(Source, source.id)
+    assert stored.url == fetcher.url
+    assert stored.trust_tier == fetcher.trust_tier
+    assert stored.enabled is False
+
+
 def test_deleting_a_source_with_items_disables_it_instead(
     client, session, make_source, make_item
 ):

@@ -52,7 +52,7 @@ from ogoh.db.models import (
     UserTopic,
 )
 from ogoh.db.session import session_scope
-from ogoh.pipeline.digest import as_utc, render_telegram
+from ogoh.pipeline.digest import as_utc, render_telegram_messages
 from ogoh.pipeline.match import pending_for_user
 from ogoh.taxonomy import LABELS_UZ, TAG_KEYS
 
@@ -182,9 +182,10 @@ async def handle_preview(message: Message) -> None:
     with session_scope() as session:
         user = _get_or_create(session, message.from_user.id, message.from_user.username)
         entries = pending_for_user(session, user, limit=5)
-        text = render_telegram(entries, lang=user.lang)
+        messages = render_telegram_messages(entries, lang=user.lang)
         keyboard = feedback_keyboard(entries)
-    await message.answer(text, reply_markup=keyboard)
+    for position, text in enumerate(messages, start=1):
+        await message.answer(text, reply_markup=keyboard if position == len(messages) else None)
 
 
 @router.callback_query(F.data.startswith(f"{VOTE_PREFIX}:"))
@@ -383,35 +384,36 @@ async def handle_keywords(message: Message, command: CommandObject) -> None:
         return
     raw = (command.args or "").strip()
 
+    # The reply goes out after the session commits: awaiting Telegram inside it
+    # would hold SQLite's write lock across a network call.
     with session_scope() as session:
         user = _get_or_create(session, message.from_user.id, message.from_user.username)
 
         if not raw:
             current = [keyword.keyword for keyword in user.keywords]
             shown = escape(", ".join(current)) if current else "(bo'sh)"
-            await message.answer(
+            reply = (
                 f"Kalit so'zlaring: <b>{shown}</b>\n\n"
                 "O'zgartirish: <code>/keywords MCP, Anthropic, rate limit</code>\n"
                 "Tozalash: <code>/keywords tozala</code>\n\n"
                 "<i>Mavzu teglaridan tashqari — sarlavha yoki nomlarda shu so'z "
                 "uchrasa, yangilik o'tadi.</i>"
             )
-            return
+        else:
+            for existing in list(user.keywords):
+                session.delete(existing)
+            session.flush()
 
-        for existing in list(user.keywords):
-            session.delete(existing)
-        session.flush()
+            if raw.lower() in ("tozala", "clear", "-"):
+                reply = "Kalit so'zlar tozalandi."
+            else:
+                keywords = _parse_keywords(raw)
+                for keyword in keywords:
+                    session.add(UserKeyword(user_id=user.id, keyword=keyword))
+                shown = escape(", ".join(keywords)) if keywords else "(bo'sh)"
+                reply = f"Saqlandi: <b>{shown}</b>"
 
-        if raw.lower() in ("tozala", "clear", "-"):
-            await message.answer("Kalit so'zlar tozalandi.")
-            return
-
-        keywords = _parse_keywords(raw)
-        for keyword in keywords:
-            session.add(UserKeyword(user_id=user.id, keyword=keyword))
-        shown = escape(", ".join(keywords)) if keywords else "(bo'sh)"
-
-    await message.answer(f"Saqlandi: <b>{shown}</b>")
+    await message.answer(reply)
 
 
 @router.message(Command("settings"))
@@ -611,8 +613,8 @@ async def handle_stop(message: Message) -> None:
         return
     with session_scope() as session:
         user = _get_or_create(session, message.from_user.id, message.from_user.username)
+        # is_active alone stops delivery. digest_mode is kept, so /start resumes as promised.
         user.is_active = False
-        user.digest_mode = "off"
     # This deactivates; it does not delete. The row keeps the telegram id, the
     # username, the chosen topics, every feedback vote, and the dated ledger of
     # everything ever delivered. Saying "deleted" while holding all of that was

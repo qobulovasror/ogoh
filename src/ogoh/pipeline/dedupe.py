@@ -138,7 +138,8 @@ def assign_clusters(
         if best_score >= CANDIDATE:
             ambiguous.append((item, best_cluster, best_title))
 
-    session.flush()
+    # Commit, not flush: the model call below must not hold SQLite's write lock.
+    session.commit()
 
     if ambiguous and provider is not None:
         _adjudicate(session, provider, ambiguous, stats)

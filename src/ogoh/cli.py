@@ -17,7 +17,7 @@ from ogoh import logsetup
 from ogoh.config import get_settings
 from ogoh.db.session import init_db, session_scope
 from ogoh.notify.telegram import send_message
-from ogoh.pipeline.digest import render_console, render_telegram, top_entries
+from ogoh.pipeline.digest import render_console, render_telegram_messages, top_entries
 from ogoh.worker import run_pipeline
 
 log = logging.getLogger("ogoh")
@@ -62,11 +62,8 @@ def main() -> int:
             log.error("--send needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env")
             return 1
 
-        send_message(
-            settings.telegram_bot_token,
-            settings.telegram_chat_id,
-            render_telegram(entries),
-        )
+        for text in render_telegram_messages(entries):
+            send_message(settings.telegram_bot_token, settings.telegram_chat_id, text)
         log.info("sent %d items to Telegram", len(entries))
 
     return 0
